@@ -1,0 +1,1268 @@
+# MoonPad — Full Stack Specification (Frontend + Backend + Infrastructure)
+
+## Overview
+
+This document covers everything outside the Anchor smart contract: the Next.js frontend, API backend, database, image/metadata storage, and deployment. Read alongside `anchor-program-spec.md`.
+
+**Live product URL (target):** moonpad.gg (or similar)
+**Primary users:** Token creators (devs) and presale participants (degens)
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS |
+| Wallet | @solana/wallet-adapter-react, Phantom, Backpack, Solflare |
+| Anchor client | @coral-xyz/anchor, @solana/web3.js |
+| Backend API | Next.js API routes (same repo) |
+| Database | PostgreSQL via Supabase (free tier → scale up) |
+| ORM | Prisma |
+| File storage | Pinata (IPFS) for token images and metadata JSON |
+| Event indexing | Custom Helius webhook listener |
+| Hosting | Vercel (frontend + API) |
+| RPC | Helius (paid) — do NOT use public RPC for production |
+
+---
+
+## Repository Structure
+
+```
+moonpad/
+├── app/                        # Next.js App Router
+│   ├── layout.tsx              # Root layout, wallet provider setup
+│   ├── page.tsx                # Homepage — presale listing
+│   ├── launch/
+│   │   └── page.tsx            # Create presale form
+│   ├── presale/
+│   │   └── [mint]/
+│   │       └── page.tsx        # Individual presale detail + buy UI
+│   └── api/
+│       ├── presales/
+│       │   ├── route.ts        # GET all presales, POST create presale metadata
+│       │   └── [mint]/
+│       │       └── route.ts    # GET single presale metadata
+│       ├── upload/
+│       │   └── route.ts        # POST image → Pinata, returns IPFS URL
+│       ├── metadata/
+│       │   └── route.ts        # POST metadata JSON → Pinata, returns URI
+│       └── webhooks/
+│           └── helius/
+│               └── route.ts    # Helius event listener
+├── components/
+│   ├── WalletProvider.tsx      # Solana wallet adapter setup
+│   ├── PresaleCard.tsx         # Card shown in listing
+│   ├── PresaleGrid.tsx         # Grid of cards with filters
+│   ├── BuyWidget.tsx           # SOL input + fee display + buy button
+│   ├── ProgressBar.tsx         # Animated raise progress
+│   ├── LaunchForm.tsx          # Multi-step create presale form
+│   ├── TokenImageUpload.tsx    # Drag/drop image → Pinata
+│   └── TransactionToast.tsx    # Transaction status toasts
+├── lib/
+│   ├── anchor.ts               # Program IDL, connection, provider setup
+│   ├── instructions.ts         # Typed wrappers for every program instruction
+│   ├── pda.ts                  # PDA derivation helpers
+│   ├── raydium.ts              # Raydium account derivation helpers
+│   ├── pinata.ts               # Pinata upload helpers
+│   └── prisma.ts               # Prisma client singleton
+├── prisma/
+│   └── schema.prisma           # Database schema
+├── public/
+│   └── idl/
+│       └── moonpad.json        # Anchor IDL (generated, copy from target/)
+├── types/
+│   └── index.ts                # Shared TypeScript types
+├── hooks/
+│   ├── usePresale.ts           # Fetch + poll presale state from chain
+│   ├── useContribution.ts      # Fetch user's contribution PDA
+│   └── useCountdown.ts         # Countdown timer
+└── .env.local                  # Environment variables
+```
+
+---
+
+## Environment Variables
+
+```bash
+# .env.local
+
+# Solana
+NEXT_PUBLIC_RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
+NEXT_PUBLIC_PROGRAM_ID=YOUR_DEPLOYED_PROGRAM_ID
+NEXT_PUBLIC_TREASURY_PUBKEY=YOUR_TREASURY_WALLET
+
+# Helius (for webhooks)
+HELIUS_API_KEY=your_helius_api_key
+HELIUS_WEBHOOK_SECRET=your_webhook_secret
+
+# Pinata
+PINATA_JWT=your_pinata_jwt_token
+NEXT_PUBLIC_PINATA_GATEWAY=https://gateway.pinata.cloud
+
+# Database
+DATABASE_URL=postgresql://user:pass@host/moonpad
+
+# App
+NEXT_PUBLIC_APP_URL=https://moonpad.gg
+```
+
+---
+
+## Database Schema (Prisma)
+
+```prisma
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Presale {
+  id              String   @id @default(cuid())
+  mint            String   @unique        // Solana mint pubkey (base58)
+  creator         String                  // Creator wallet pubkey
+  
+  // Token info (mirrors what's on chain but queryable)
+  tokenName       String
+  tokenTicker     String
+  description     String
+  imageUrl        String                  // IPFS image URL
+  metadataUri     String                  // IPFS metadata JSON URI
+  
+  // Social links
+  twitter         String?
+  telegram        String?
+  website         String?
+  
+  // Presale state (synced from chain via webhooks)
+  totalRaised     BigInt   @default(0)    // Lamports
+  totalContributors Int    @default(0)
+  raiseTarget     BigInt   @default(85000000000) // 85 SOL
+  startTime       DateTime
+  endTime         DateTime
+  launched        Boolean  @default(false)
+  refundEnabled   Boolean  @default(false)
+  
+  // Metadata
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  contributions   Contribution[]
+  
+  @@index([launched])
+  @@index([endTime])
+  @@index([totalRaised])
+}
+
+model Contribution {
+  id              String   @id @default(cuid())
+  mint            String
+  contributor     String                  // Wallet pubkey
+  amountContributed BigInt               // Lamports (net, after fee)
+  claimed         Boolean  @default(false)
+  refunded        Boolean  @default(false)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  presale         Presale  @relation(fields: [mint], references: [mint])
+  
+  @@unique([mint, contributor])
+  @@index([contributor])
+}
+
+model WebhookEvent {
+  id              String   @id @default(cuid())
+  signature       String   @unique
+  type            String                  // "PresaleCreated", "ContributionMade", etc.
+  mint            String?
+  processed       Boolean  @default(false)
+  rawData         Json
+  createdAt       DateTime @default(now())
+}
+```
+
+---
+
+## lib/anchor.ts
+
+```typescript
+import { Connection, PublicKey, Commitment } from "@solana/web3.js";
+import { AnchorProvider, Program, Idl } from "@coral-xyz/anchor";
+import idl from "@/public/idl/moonpad.json";
+
+export const PROGRAM_ID = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID!);
+
+export const TREASURY = new PublicKey(process.env.NEXT_PUBLIC_TREASURY_PUBKEY!);
+
+export const WSOL_MINT = new PublicKey(
+  "So11111111111111111111111111111111111111112"
+);
+
+export const RAYDIUM_CPMM = new PublicKey(
+  "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK"
+);
+
+export function getConnection(commitment: Commitment = "confirmed") {
+  return new Connection(process.env.NEXT_PUBLIC_RPC_URL!, commitment);
+}
+
+export function getProgram(provider: AnchorProvider) {
+  return new Program(idl as Idl, PROGRAM_ID, provider);
+}
+```
+
+---
+
+## lib/pda.ts
+
+```typescript
+import { PublicKey } from "@solana/web3.js";
+import { PROGRAM_ID } from "./anchor";
+
+export function findPresaleState(mint: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("presale"), mint.toBuffer()],
+    PROGRAM_ID
+  );
+}
+
+export function findVault(mint: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("vault"), mint.toBuffer()],
+    PROGRAM_ID
+  );
+}
+
+export function findTokenVault(mint: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("token_vault"), mint.toBuffer()],
+    PROGRAM_ID
+  );
+}
+
+export function findContribution(mint: PublicKey, contributor: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("contribution"), mint.toBuffer(), contributor.toBuffer()],
+    PROGRAM_ID
+  );
+}
+```
+
+---
+
+## lib/instructions.ts
+
+Typed wrappers around every Anchor instruction. Import these in components — never call program.methods directly from UI components.
+
+```typescript
+import {
+  PublicKey,
+  SystemProgram,
+  SYSVAR_RENT_PUBKEY,
+  Transaction,
+} from "@solana/web3.js";
+import {
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
+import { BN } from "@coral-xyz/anchor";
+import { findPresaleState, findVault, findTokenVault, findContribution } from "./pda";
+import { TREASURY, RAYDIUM_CPMM, WSOL_MINT } from "./anchor";
+
+export interface InitPresaleParams {
+  tokenName: string;
+  tokenTicker: string;
+  tokenUri: string;
+  description: string;
+  durationSeconds: number;  // e.g. 86400
+  maxContribution: number;  // lamports, 0 = no limit
+  twitter: string;
+  telegram: string;
+  website: string;
+}
+
+export async function buildInitializePresaleTx(
+  program: any,
+  creator: PublicKey,
+  mint: PublicKey,
+  params: InitPresaleParams
+): Promise<Transaction> {
+  const [presaleState] = findPresaleState(mint);
+  const [tokenVault] = findTokenVault(mint);
+
+  // Metaplex metadata PDA
+  const TOKEN_METADATA_PROGRAM = new PublicKey(
+    "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s"
+  );
+  const [metadata] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("metadata"),
+      TOKEN_METADATA_PROGRAM.toBuffer(),
+      mint.toBuffer(),
+    ],
+    TOKEN_METADATA_PROGRAM
+  );
+
+  const tx = await program.methods
+    .initializePresale({
+      tokenName: params.tokenName,
+      tokenTicker: params.tokenTicker,
+      tokenUri: params.tokenUri,
+      description: params.description,
+      durationSeconds: new BN(params.durationSeconds),
+      maxContribution: new BN(params.maxContribution),
+      twitter: params.twitter,
+      telegram: params.telegram,
+      website: params.website,
+    })
+    .accounts({
+      creator,
+      presaleState,
+      mint,
+      tokenVault,
+      treasury: TREASURY,
+      metadata,
+      tokenMetadataProgram: TOKEN_METADATA_PROGRAM,
+      systemProgram: SystemProgram.programId,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      rent: SYSVAR_RENT_PUBKEY,
+    })
+    .transaction();
+
+  return tx;
+}
+
+export async function buildContributeTx(
+  program: any,
+  contributor: PublicKey,
+  mint: PublicKey,
+  amountLamports: number
+): Promise<Transaction> {
+  const [presaleState] = findPresaleState(mint);
+  const [vault] = findVault(mint);
+  const [contributionState] = findContribution(mint, contributor);
+
+  const tx = await program.methods
+    .contribute(new BN(amountLamports))
+    .accounts({
+      contributor,
+      mint,
+      presaleState,
+      vault,
+      contributionState,
+      treasury: TREASURY,
+      systemProgram: SystemProgram.programId,
+    })
+    .transaction();
+
+  return tx;
+}
+
+export async function buildWithdrawTx(
+  program: any,
+  contributor: PublicKey,
+  mint: PublicKey
+): Promise<Transaction> {
+  const [presaleState] = findPresaleState(mint);
+  const [vault] = findVault(mint);
+  const [contributionState] = findContribution(mint, contributor);
+
+  return await program.methods
+    .withdrawContribution()
+    .accounts({
+      contributor,
+      mint,
+      presaleState,
+      vault,
+      contributionState,
+      treasury: TREASURY,
+      systemProgram: SystemProgram.programId,
+    })
+    .transaction();
+}
+
+export async function buildClaimTokensTx(
+  program: any,
+  contributor: PublicKey,
+  mint: PublicKey
+): Promise<Transaction> {
+  const [presaleState] = findPresaleState(mint);
+  const [tokenVault] = findTokenVault(mint);
+  const [contributionState] = findContribution(mint, contributor);
+  const contributorTokenAccount = getAssociatedTokenAddressSync(mint, contributor);
+
+  return await program.methods
+    .claimTokens()
+    .accounts({
+      contributor,
+      mint,
+      presaleState,
+      tokenVault,
+      contributionState,
+      contributorTokenAccount,
+      systemProgram: SystemProgram.programId,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+    })
+    .transaction();
+}
+```
+
+---
+
+## lib/pinata.ts
+
+```typescript
+// Upload image to Pinata, get back IPFS URL
+export async function uploadImageToPinata(file: File): Promise<string> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append(
+    "pinataMetadata",
+    JSON.stringify({ name: `moonpad-token-image-${Date.now()}` })
+  );
+
+  const res = await fetch("/api/upload", {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) throw new Error("Image upload failed");
+  const data = await res.json();
+  return `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`;
+}
+
+// Upload metadata JSON (Metaplex standard), return URI
+export async function uploadMetadataJson(params: {
+  name: string;
+  symbol: string;
+  description: string;
+  image: string; // IPFS image URL
+  twitter?: string;
+  telegram?: string;
+  website?: string;
+}): Promise<string> {
+  const metadata = {
+    name: params.name,
+    symbol: params.symbol,
+    description: params.description,
+    image: params.image,
+    external_url: params.website || "",
+    attributes: [],
+    properties: {
+      files: [{ uri: params.image, type: "image/png" }],
+      category: "image",
+    },
+    extensions: {
+      twitter: params.twitter || "",
+      telegram: params.telegram || "",
+      website: params.website || "",
+    },
+  };
+
+  const res = await fetch("/api/metadata", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(metadata),
+  });
+
+  if (!res.ok) throw new Error("Metadata upload failed");
+  const data = await res.json();
+  return `https://gateway.pinata.cloud/ipfs/${data.IpfsHash}`;
+}
+```
+
+---
+
+## API Routes
+
+### POST /api/upload — Image to Pinata
+
+```typescript
+// app/api/upload/route.ts
+import { NextRequest, NextResponse } from "next/server";
+
+export async function POST(req: NextRequest) {
+  const formData = await req.formData();
+  const file = formData.get("file") as File;
+
+  if (!file) return NextResponse.json({ error: "No file" }, { status: 400 });
+
+  // Max 2MB
+  if (file.size > 2 * 1024 * 1024) {
+    return NextResponse.json({ error: "File too large (max 2MB)" }, { status: 413 });
+  }
+
+  // Only allow images
+  if (!file.type.startsWith("image/")) {
+    return NextResponse.json({ error: "Must be an image" }, { status: 400 });
+  }
+
+  const pinataForm = new FormData();
+  pinataForm.append("file", file);
+  pinataForm.append(
+    "pinataMetadata",
+    JSON.stringify({ name: `moonpad-${Date.now()}` })
+  );
+
+  const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.PINATA_JWT}` },
+    body: pinataForm,
+  });
+
+  const data = await res.json();
+  return NextResponse.json(data);
+}
+```
+
+### POST /api/metadata — Metadata JSON to Pinata
+
+```typescript
+// app/api/metadata/route.ts
+import { NextRequest, NextResponse } from "next/server";
+
+export async function POST(req: NextRequest) {
+  const body = await req.json();
+
+  const res = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.PINATA_JWT}`,
+    },
+    body: JSON.stringify({
+      pinataContent: body,
+      pinataMetadata: { name: `moonpad-meta-${Date.now()}` },
+    }),
+  });
+
+  const data = await res.json();
+  return NextResponse.json(data);
+}
+```
+
+### GET /api/presales — List all presales
+
+```typescript
+// app/api/presales/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const filter = searchParams.get("filter") || "live"; // live | ended | launched
+  const page = parseInt(searchParams.get("page") || "1");
+  const limit = 20;
+
+  const now = new Date();
+
+  let where: any = {};
+  if (filter === "live") {
+    where = { launched: false, refundEnabled: false, endTime: { gt: now } };
+  } else if (filter === "ended") {
+    where = { launched: false, endTime: { lt: now } };
+  } else if (filter === "launched") {
+    where = { launched: true };
+  }
+
+  const [presales, total] = await Promise.all([
+    prisma.presale.findMany({
+      where,
+      orderBy: { totalRaised: "desc" },
+      skip: (page - 1) * limit,
+      take: limit,
+      select: {
+        mint: true,
+        tokenName: true,
+        tokenTicker: true,
+        imageUrl: true,
+        description: true,
+        totalRaised: true,
+        raiseTarget: true,
+        totalContributors: true,
+        endTime: true,
+        launched: true,
+        refundEnabled: true,
+      },
+    }),
+    prisma.presale.count({ where }),
+  ]);
+
+  return NextResponse.json({
+    presales: presales.map((p) => ({
+      ...p,
+      totalRaised: p.totalRaised.toString(),
+      raiseTarget: p.raiseTarget.toString(),
+      progressPercent: Math.min(
+        100,
+        Math.round((Number(p.totalRaised) / Number(p.raiseTarget)) * 100)
+      ),
+    })),
+    total,
+    pages: Math.ceil(total / limit),
+  });
+}
+
+// POST — called after tx confirms, to register presale in DB
+export async function POST(req: NextRequest) {
+  const body = await req.json();
+
+  const presale = await prisma.presale.create({
+    data: {
+      mint: body.mint,
+      creator: body.creator,
+      tokenName: body.tokenName,
+      tokenTicker: body.tokenTicker,
+      description: body.description,
+      imageUrl: body.imageUrl,
+      metadataUri: body.metadataUri,
+      twitter: body.twitter || null,
+      telegram: body.telegram || null,
+      website: body.website || null,
+      startTime: new Date(),
+      endTime: new Date(Date.now() + body.durationSeconds * 1000),
+    },
+  });
+
+  return NextResponse.json({ presale });
+}
+```
+
+### POST /api/webhooks/helius — On-chain event listener
+
+```typescript
+// app/api/webhooks/helius/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import crypto from "crypto";
+
+// Helius sends transaction events. We listen for our program's events
+// and update the DB accordingly.
+
+export async function POST(req: NextRequest) {
+  // Verify webhook signature
+  const signature = req.headers.get("helius-signature");
+  const body = await req.text();
+  const expected = crypto
+    .createHmac("sha256", process.env.HELIUS_WEBHOOK_SECRET!)
+    .update(body)
+    .digest("hex");
+
+  if (signature !== expected) {
+    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  }
+
+  const events = JSON.parse(body);
+
+  for (const event of events) {
+    // Parse Anchor events from transaction logs
+    // Helius enhanced transactions include parsed logs
+    const logs: string[] = event.meta?.logMessages || [];
+
+    for (const log of logs) {
+      if (log.includes("ContributionMade")) {
+        await handleContributionEvent(log, event);
+      } else if (log.includes("PresaleLaunched")) {
+        await handleLaunchEvent(log, event);
+      } else if (log.includes("ContributionWithdrawn")) {
+        await handleWithdrawalEvent(log, event);
+      }
+    }
+  }
+
+  return NextResponse.json({ ok: true });
+}
+
+async function handleContributionEvent(log: string, event: any) {
+  // Parse the Anchor event data from the log
+  // Anchor emits events as base64-encoded data in logs
+  // The log line format: "Program data: <base64>"
+  // Decode and deserialize using the IDL
+
+  // Simplified: extract mint from accounts array and update DB
+  const mint = event.accountData?.find(/* match presale_state account */)?.pubkey;
+  if (!mint) return;
+
+  // Fetch fresh state from chain and update DB
+  // Better: decode the event log directly to avoid extra RPC calls
+  await prisma.presale.update({
+    where: { mint },
+    data: {
+      // Parse from event: total_raised, total_contributors
+    },
+  });
+}
+
+async function handleLaunchEvent(log: string, event: any) {
+  const mint = /* extract from event */;
+  await prisma.presale.update({
+    where: { mint },
+    data: { launched: true },
+  });
+}
+
+async function handleWithdrawalEvent(log: string, event: any) {
+  const mint = /* extract */;
+  const contributor = /* extract */;
+  await prisma.contribution.update({
+    where: { mint_contributor: { mint, contributor } },
+    data: { refunded: true, amountContributed: BigInt(0) },
+  });
+}
+```
+
+**Helius webhook setup:**
+Register your webhook via Helius dashboard:
+- Webhook URL: `https://moonpad.gg/api/webhooks/helius`
+- Transaction type: Program interactions
+- Account: `YOUR_PROGRAM_ID`
+- Enhanced transactions: yes
+
+---
+
+## Frontend Components
+
+### components/WalletProvider.tsx
+
+```typescript
+"use client";
+import { useMemo } from "react";
+import {
+  ConnectionProvider,
+  WalletProvider,
+} from "@solana/wallet-adapter-react";
+import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
+import {
+  PhantomWalletAdapter,
+  SolflareWalletAdapter,
+  BackpackWalletAdapter,
+} from "@solana/wallet-adapter-wallets";
+import "@solana/wallet-adapter-react-ui/styles.css";
+
+export function SolanaWalletProvider({ children }: { children: React.ReactNode }) {
+  const wallets = useMemo(
+    () => [
+      new PhantomWalletAdapter(),
+      new SolflareWalletAdapter(),
+      new BackpackWalletAdapter(),
+    ],
+    []
+  );
+
+  return (
+    <ConnectionProvider endpoint={process.env.NEXT_PUBLIC_RPC_URL!}>
+      <WalletProvider wallets={wallets} autoConnect>
+        <WalletModalProvider>{children}</WalletModalProvider>
+      </WalletProvider>
+    </ConnectionProvider>
+  );
+}
+```
+
+### hooks/usePresale.ts
+
+```typescript
+"use client";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { useEffect, useState } from "react";
+import { PublicKey } from "@solana/web3.js";
+import { findPresaleState } from "@/lib/pda";
+import { getProgram } from "@/lib/anchor";
+import { AnchorProvider } from "@coral-xyz/anchor";
+
+export interface PresaleOnChainState {
+  mint: string;
+  totalRaised: bigint;
+  raiseTarget: bigint;
+  totalContributors: number;
+  endTime: Date;
+  launched: boolean;
+  refundEnabled: boolean;
+  progressPercent: number;
+}
+
+export function usePresale(mintAddress: string) {
+  const { connection } = useConnection();
+  const [state, setState] = useState<PresaleOnChainState | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!mintAddress) return;
+
+    const fetchState = async () => {
+      try {
+        const mint = new PublicKey(mintAddress);
+        const [presaleStatePda] = findPresaleState(mint);
+
+        // Use a read-only provider
+        const provider = new AnchorProvider(connection, {} as any, {});
+        const program = getProgram(provider);
+
+        const data = await program.account.presaleState.fetch(presaleStatePda);
+
+        const totalRaised = BigInt(data.totalRaised.toString());
+        const raiseTarget = BigInt(data.raiseTarget.toString());
+
+        setState({
+          mint: mintAddress,
+          totalRaised,
+          raiseTarget,
+          totalContributors: data.totalContributors,
+          endTime: new Date(data.endTime.toNumber() * 1000),
+          launched: data.launched,
+          refundEnabled: data.refundEnabled,
+          progressPercent: Math.min(
+            100,
+            Math.round(Number(totalRaised) / Number(raiseTarget) * 100)
+          ),
+        });
+      } catch (e) {
+        setError("Failed to load presale state");
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchState();
+
+    // Poll every 10 seconds for live updates
+    const interval = setInterval(fetchState, 10_000);
+    return () => clearInterval(interval);
+  }, [mintAddress, connection]);
+
+  return { state, loading, error };
+}
+```
+
+### components/LaunchForm.tsx — Multi-step create presale form
+
+The form has 3 steps:
+1. Token info (name, ticker, description, image upload)
+2. Presale settings (duration, max contribution, socials)
+3. Review + pay
+
+```typescript
+"use client";
+import { useState } from "react";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { Keypair, Transaction } from "@solana/web3.js";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { uploadImageToPinata, uploadMetadataJson } from "@/lib/pinata";
+import { buildInitializePresaleTx } from "@/lib/instructions";
+import { getProgram } from "@/lib/anchor";
+import { AnchorProvider } from "@coral-xyz/anchor";
+
+type Step = 1 | 2 | 3;
+
+export function LaunchForm() {
+  const { publicKey, sendTransaction, signTransaction } = useWallet();
+  const { connection } = useConnection();
+  const [step, setStep] = useState<Step>(1);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [tokenName, setTokenName] = useState("");
+  const [tokenTicker, setTokenTicker] = useState("");
+  const [description, setDescription] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [durationSeconds, setDurationSeconds] = useState(86400);
+  const [maxContribution, setMaxContribution] = useState(0);
+  const [twitter, setTwitter] = useState("");
+  const [telegram, setTelegram] = useState("");
+  const [website, setWebsite] = useState("");
+
+  const handleImageChange = (file: File) => {
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+  };
+
+  const handleLaunch = async () => {
+    if (!publicKey || !imageFile) return;
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Step 1: Upload image
+      const imageUrl = await uploadImageToPinata(imageFile);
+
+      // Step 2: Upload metadata JSON
+      const metadataUri = await uploadMetadataJson({
+        name: tokenName,
+        symbol: tokenTicker,
+        description,
+        image: imageUrl,
+        twitter,
+        telegram,
+        website,
+      });
+
+      // Step 3: Build transaction (new mint keypair each time)
+      const mint = Keypair.generate();
+
+      const provider = new AnchorProvider(connection, {
+        publicKey,
+        signTransaction: signTransaction!,
+        signAllTransactions: async (txs) => txs,
+      }, { commitment: "confirmed" });
+
+      const program = getProgram(provider);
+
+      const tx = await buildInitializePresaleTx(program, publicKey, mint.publicKey, {
+        tokenName,
+        tokenTicker,
+        tokenUri: metadataUri,
+        description,
+        durationSeconds,
+        maxContribution: maxContribution * 1_000_000_000, // SOL → lamports
+        twitter,
+        telegram,
+        website,
+      });
+
+      // mint keypair must also sign (it's the new mint account)
+      tx.feePayer = publicKey;
+      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      tx.partialSign(mint);
+
+      const sig = await sendTransaction(tx, connection, {
+        signers: [],
+        skipPreflight: false,
+      });
+
+      await connection.confirmTransaction(sig, "confirmed");
+
+      // Step 4: Register in DB
+      await fetch("/api/presales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mint: mint.publicKey.toBase58(),
+          creator: publicKey.toBase58(),
+          tokenName,
+          tokenTicker,
+          description,
+          imageUrl,
+          metadataUri,
+          twitter,
+          telegram,
+          website,
+          durationSeconds,
+        }),
+      });
+
+      // Redirect to presale page
+      window.location.href = `/presale/${mint.publicKey.toBase58()}`;
+    } catch (e: any) {
+      setError(e.message || "Transaction failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Render step UI...
+  // Step 1: token name, ticker, description, image upload
+  // Step 2: duration selector, max contribution, socials
+  // Step 3: fee breakdown, launch button
+}
+```
+
+### components/BuyWidget.tsx
+
+```typescript
+"use client";
+import { useState } from "react";
+import { useWallet, useConnection } from "@solana/wallet-adapter-react";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { AnchorProvider } from "@coral-xyz/anchor";
+import { buildContributeTx, buildWithdrawTx, buildClaimTokensTx } from "@/lib/instructions";
+import { getProgram } from "@/lib/anchor";
+import { usePresale } from "@/hooks/usePresale";
+import { useContribution } from "@/hooks/useContribution";
+
+interface BuyWidgetProps {
+  mintAddress: string;
+}
+
+export function BuyWidget({ mintAddress }: BuyWidgetProps) {
+  const { publicKey, sendTransaction, signTransaction } = useWallet();
+  const { connection } = useConnection();
+  const { state } = usePresale(mintAddress);
+  const { contribution } = useContribution(mintAddress, publicKey?.toBase58());
+
+  const [amount, setAmount] = useState("1");
+  const [loading, setLoading] = useState(false);
+  const [txSig, setTxSig] = useState<string | null>(null);
+
+  const amountLamports = parseFloat(amount) * LAMPORTS_PER_SOL;
+  const platformFee = amountLamports * 0.01;
+  const netAmount = amountLamports * 0.99;
+
+  const handleBuy = async () => {
+    if (!publicKey || !state) return;
+    setLoading(true);
+    try {
+      const provider = new AnchorProvider(
+        connection,
+        { publicKey, signTransaction: signTransaction!, signAllTransactions: async (txs) => txs },
+        { commitment: "confirmed" }
+      );
+      const program = getProgram(provider);
+      const mint = new PublicKey(mintAddress);
+
+      const tx = await buildContributeTx(program, publicKey, mint, amountLamports);
+      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      tx.feePayer = publicKey;
+
+      const sig = await sendTransaction(tx, connection);
+      await connection.confirmTransaction(sig, "confirmed");
+      setTxSig(sig);
+      // Refresh state
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleWithdraw = async () => {
+    if (!publicKey) return;
+    const confirmed = confirm(
+      "Withdraw early? You'll get back 97% of your contribution (3% penalty)."
+    );
+    if (!confirmed) return;
+    // Similar to handleBuy but call buildWithdrawTx
+  };
+
+  const handleClaim = async () => {
+    if (!publicKey) return;
+    // Call buildClaimTokensTx after launch
+  };
+
+  // ... render UI
+}
+```
+
+---
+
+## Page: /presale/[mint]/page.tsx
+
+```typescript
+// app/presale/[mint]/page.tsx
+import { prisma } from "@/lib/prisma";
+import { notFound } from "next/navigation";
+import { BuyWidget } from "@/components/BuyWidget";
+
+interface Props {
+  params: { mint: string };
+}
+
+// Server component — fetch metadata from DB
+export default async function PresalePage({ params }: Props) {
+  const presale = await prisma.presale.findUnique({
+    where: { mint: params.mint },
+  });
+
+  if (!presale) notFound();
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 py-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2">
+          {/* Token header, description, how it works */}
+          <h1>{presale.tokenName}</h1>
+          <p>{presale.description}</p>
+          {/* On-chain progress bar — client component */}
+        </div>
+        <div>
+          <BuyWidget mintAddress={params.mint} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Generate metadata for SEO/OG
+export async function generateMetadata({ params }: Props) {
+  const presale = await prisma.presale.findUnique({
+    where: { mint: params.mint },
+    select: { tokenName: true, description: true, imageUrl: true },
+  });
+
+  return {
+    title: `${presale?.tokenName} Presale — MoonPad`,
+    description: presale?.description,
+    openGraph: {
+      images: [presale?.imageUrl],
+    },
+  };
+}
+```
+
+---
+
+## Transaction UX Patterns
+
+Solana transactions are fast but confirmations still take 1–3 seconds. Use this pattern everywhere:
+
+```typescript
+// 1. Optimistic UI: immediately update state before confirmation
+// 2. Show spinner with "Confirming..." text
+// 3. On confirm: show success toast with explorer link
+// 4. On error: show error toast, revert optimistic state
+
+const EXPLORER_BASE = "https://solscan.io/tx";
+
+function explorerLink(sig: string) {
+  return `${EXPLORER_BASE}/${sig}`;
+}
+
+// Toast example (use react-hot-toast or sonner):
+import toast from "react-hot-toast";
+
+toast.promise(
+  sendAndConfirm(), // your async fn
+  {
+    loading: "Confirming transaction...",
+    success: (sig) => (
+      <span>
+        Done!{" "}
+        <a href={explorerLink(sig)} target="_blank">
+          View on Solscan ↗
+        </a>
+      </span>
+    ),
+    error: (e) => `Failed: ${e.message}`,
+  }
+);
+```
+
+---
+
+## package.json dependencies
+
+```json
+{
+  "dependencies": {
+    "next": "14.2.x",
+    "react": "^18",
+    "react-dom": "^18",
+    "typescript": "^5",
+    "@solana/web3.js": "^1.95.x",
+    "@solana/wallet-adapter-react": "^0.15.x",
+    "@solana/wallet-adapter-react-ui": "^0.9.x",
+    "@solana/wallet-adapter-wallets": "^0.19.x",
+    "@solana/spl-token": "^0.4.x",
+    "@coral-xyz/anchor": "^0.30.x",
+    "@prisma/client": "^5.x",
+    "tailwindcss": "^3.x",
+    "react-hot-toast": "^2.x",
+    "clsx": "^2.x"
+  },
+  "devDependencies": {
+    "prisma": "^5.x",
+    "@types/node": "^20",
+    "@types/react": "^18"
+  }
+}
+```
+
+---
+
+## Deployment
+
+### Vercel
+
+```bash
+# Install Vercel CLI
+npm i -g vercel
+
+# Deploy
+vercel --prod
+
+# Set environment variables in Vercel dashboard
+# or via CLI:
+vercel env add NEXT_PUBLIC_RPC_URL
+vercel env add PINATA_JWT
+vercel env add DATABASE_URL
+vercel env add HELIUS_WEBHOOK_SECRET
+```
+
+### Database (Supabase)
+
+1. Create project at supabase.com
+2. Copy connection string to `DATABASE_URL`
+3. `npx prisma migrate deploy`
+4. Enable connection pooling for Vercel (use the pooler URL, not direct)
+
+### Helius Setup
+
+1. Sign up at helius.dev
+2. Create an RPC endpoint (use this as `NEXT_PUBLIC_RPC_URL`)
+3. Create a webhook:
+   - Type: Enhanced transactions
+   - Account addresses: your deployed program ID
+   - Webhook URL: `https://moonpad.gg/api/webhooks/helius`
+   - Auth header: your webhook secret
+
+---
+
+## Launch Sequence (What Happens When User Submits "Launch")
+
+```
+1. User fills form → clicks "Connect wallet & pay 1 SOL to launch"
+2. Frontend:
+   a. POST /api/upload → image to Pinata → get image IPFS URL
+   b. POST /api/metadata → metadata JSON to Pinata → get metadata URI
+   c. Generate new mint Keypair (client side)
+   d. Build initializePresale tx (program.methods.initializePresale...)
+   e. partialSign with mint keypair
+   f. sendTransaction → user signs in wallet → broadcast
+3. await confirmTransaction
+4. POST /api/presales with all metadata → write to DB
+5. Redirect to /presale/[mint]
+6. Helius webhook fires → updates DB with on-chain state
+```
+
+---
+
+## Security Notes for Frontend
+
+- Never expose `PINATA_JWT` to the client — all Pinata calls go through `/api/upload` and `/api/metadata`
+- Rate-limit API routes: use Vercel's `@vercel/kv` or simple IP-based rate limiting to prevent spam
+- Validate all user inputs server-side before writing to DB
+- The program is the source of truth — DB is just a read cache for fast queries. Always fetch on-chain state for anything financial
+- Do not trust the mint keypair from the client for any API writes — derive presale data from the mint pubkey only after confirming it matches a valid on-chain presale state
+
+---
+
+## Key Numbers Summary
+
+| Parameter | Value |
+|---|---|
+| Raise target | 85 SOL |
+| LP allocation | 50% of supply (500M tokens) |
+| Distribution allocation | 50% of supply (500M tokens) |
+| Token decimals | 6 |
+| Total supply | 1,000,000,000 tokens |
+| Launch fee (dev pays) | 1 SOL |
+| Platform fee on contributions | 1% |
+| Early withdrawal penalty | 3% |
+| Minimum contribution | 0.01 SOL |
+| Minimum presale duration | 1 hour |
+| Maximum presale duration | 7 days |
+| Raydium pool fee tier | 0.25% |

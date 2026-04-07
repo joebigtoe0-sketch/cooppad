@@ -1,0 +1,1118 @@
+# MoonPad — Anchor Smart Contract Specification
+
+> **Meteora DAMM v2 addendum:** Detailed pool params, account layouts, fee scheduler, TS helpers, and migration notes live in [`meteora`](meteora) (repo root). This file is the authoritative program specification.
+
+## Overview
+
+This document specifies the complete Solana/Anchor program for MoonPad, a Solana memetoken presale launchpad. The program handles presale creation, SOL contributions, early withdrawals, and **Meteora DAMM v2** liquidity when the raise target is met. Liquidity uses **`initialize_customizable_pool`**, then **`permanent_lock_position`** (rug-proof); trading fees (SOL via `collectFeeMode = OnlyB`) are **`claim_fee`**’d into a **`fee_vault` PDA**, then distributed to contributors **pro-rata** via `fee_pool_per_share_x64` / `collect_my_fees`.
+
+**Target raise per presale:** 85 SOL (hardcoded)
+
+**Token split:** 85 SOL + 50% of supply → DAMM v2 pool (locked); 50% of supply stays in `token_vault` for contributor **token** claims.
+
+**Program type:** Single deployed factory program; per-token state stored in PDAs
+
+---
+
+## Technology Stack
+
+- **Anchor framework:** 0.31.x (align with [MeteoraAg/damm-v2](https://github.com/MeteoraAg/damm-v2) CPI)
+- **Solana SDK:** match Anchor toolchain
+- **Rust edition:** 2021
+- **Meteora DAMM v2:** `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG` (mainnet + devnet)
+- **SPL Token:** `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`
+- **SPL Associated Token:** `ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bx`
+- **Metaplex Token Metadata:** `metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s`
+- **Optional:** `cp-amm` from MeteoraAg/damm-v2 with `cpi` feature, or raw CPI from verified IDL
+
+---
+
+## Program Architecture
+
+### Single Program, Multiple Presales
+
+Deploy **one** program. Each presale is a set of PDAs derived from the token mint address. This avoids deploying new contracts per token (expensive, complex).
+
+```
+program_id (deployed once)
+├── presale_state PDA [seeds: b"presale", mint.key()]
+├── presale_vault PDA [seeds: b"vault", mint.key()]  ← holds contributed SOL
+├── token_vault PDA  [seeds: b"token_vault", mint.key()] ← tokens for contributor claims (50% after launch)
+├── fee_vault PDA [seeds: b"fee_vault", mint.key()] ← SOL from claimed LP fees (unwrap WSOL here)
+└── contribution PDA [seeds: b"contribution", mint.key(), contributor.key()]
+```
+
+### Flow Summary
+
+```
+1. Dev calls initialize_presale()
+   → Creates mint, mints 1B tokens to token_vault PDA
+   → Creates presale_state with metadata
+   → Pays launch_fee (1 SOL) → platform treasury
+
+2. Users call contribute(amount)
+   → SOL goes to presale_vault PDA
+   → contribution PDA updated
+   → 1% platform fee deducted and sent to treasury
+
+3. Users can call withdraw_contribution() before launch
+   → Returns 97% of their contribution (3% penalty kept by treasury)
+
+4. Anyone calls launch_presale() when raised >= 85 SOL (or presale ended and goal met)
+   → Wrap 85 SOL → WSOL; CPI DAMM v2 `initialize_customizable_pool` + `permanent_lock_position` (see [`meteora`](meteora))
+   → Position NFT held by `presale_state` PDA; store `pool`, `position_nft_mint`, `tokens_per_lamport_x64`, `launched = true`
+
+5. Contributors call claim_tokens() after launch → pro-rata **tokens** from `token_vault`
+
+5b. claim_pool_fees() → CPI `claim_fee`; unwrap WSOL to `fee_vault`; update `fee_pool_per_share_x64`
+
+5c. collect_my_fees() → contributor pulls pro-rata SOL from `fee_vault`
+
+6. If presale ends WITHOUT hitting goal, dev or contributors call refund()
+   → Everyone gets their SOL back (minus the 1% entry fee which is non-refundable)
+```
+
+---
+
+## Account Structures
+
+### PresaleState
+
+```rust
+#[account]
+pub struct PresaleState {
+    // Token info
+    pub mint: Pubkey,                    // The SPL token mint
+    pub token_name: String,              // Max 32 chars
+    pub token_ticker: String,            // Max 10 chars
+    pub token_uri: String,               // IPFS metadata URI, max 200 chars
+    pub description: String,             // Max 256 chars
+
+    // Presale config
+    pub creator: Pubkey,                 // Dev who created the presale
+    pub raise_target: u64,               // Always 85_000_000_000 lamports (85 SOL)
+    pub total_supply: u64,               // Always 1_000_000_000_000_000 (1B with 6 decimals)
+    pub lp_tokens_amount: u64,           // 50% of supply = 500_000_000_000_000
+    pub distribution_amount: u64,        // 50% of supply = 500_000_000_000_000
+
+    // Presale state
+    pub total_raised: u64,               // Lamports raised so far
+    pub total_contributors: u32,         // Count of unique contributors
+    pub start_time: i64,                 // Unix timestamp
+    pub end_time: i64,                   // Unix timestamp (start + duration)
+    pub launched: bool,                  // True after DAMM v2 pool + lock
+    pub refund_enabled: bool,            // True if presale failed (goal not met by end_time)
+    pub tokens_per_lamport_x64: u128,    // Fixed-point: distribution_amount / total_raised (set at launch)
+
+    pub max_contribution: u64,           // 0 = no cap; lamports (net after platform fee)
+
+    // DAMM v2 / fees
+    pub position_nft_mint: Pubkey,         // Default Pubkey::default() until launch
+    pub pool: Pubkey,                    // DAMM v2 pool address
+    pub total_fees_claimed: u64,         // Running SOL (lamports) claimed from Meteora
+    pub fee_pool_balance: u64,           // SOL in fee_vault (optional mirror; lamports)
+    pub fee_pool_per_share_x64: u128,     // Accumulated fees per contributed lamport (fixed-point)
+
+    // PDAs
+    pub vault_bump: u8,
+    pub token_vault_bump: u8,
+    pub state_bump: u8,
+    pub fee_vault_bump: u8,
+
+    // Social links (optional, max 100 chars each)
+    pub twitter: String,
+    pub telegram: String,
+    pub website: String,
+}
+```
+
+**Space calculation:**
+```rust
+// 8 (discriminator)
+// + 32 (mint) + 4+32 (name) + 4+10 (ticker) + 4+200 (uri) + 4+256 (desc)
+// + 32 (creator) + 8 + 8 + 8 + 8 (u64s)
+// + 8 + 8 + 4 + 8 + 8 (state fields)
+// + 1 + 1 + 16 (bool, bool, u128)
+// + 1 + 1 + 1 (bumps)
+// + 4+100 + 4+100 + 4+100 (socials)
+// + max_contribution + DAMM/fee fields + fee_vault_bump — use 1536 for safety
+pub const PRESALE_STATE_SIZE: usize = 1536;
+```
+
+### ContributionState
+
+```rust
+#[account]
+pub struct ContributionState {
+    pub contributor: Pubkey,
+    pub mint: Pubkey,
+    pub amount_contributed: u64,    // Lamports after fee deduction (what's in the vault)
+    pub claimed: bool,              // Tokens claimed after launch
+    pub refunded: bool,             // SOL refunded after failed presale (not early withdraw)
+    pub early_withdrew: bool,       // True if exited via withdraw_contribution before launch
+    pub bump: u8,
+
+    pub fee_debt_x64: u128,         // For collect_my_fees accumulator
+    pub fees_collected: u64,        // Total SOL fees user has collected
+}
+
+pub const CONTRIBUTION_STATE_SIZE: usize = 192;
+```
+
+---
+
+## Instructions
+
+### 1. `initialize_presale`
+
+Creates the token mint, mints all tokens, and sets up presale state.
+
+```rust
+pub fn initialize_presale(
+    ctx: Context<InitializePresale>,
+    params: InitializePresaleParams,
+) -> Result<()>
+```
+
+**Params struct:**
+```rust
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct InitializePresaleParams {
+    pub token_name: String,       // Max 32 chars
+    pub token_ticker: String,     // Max 10 chars
+    pub token_uri: String,        // IPFS URI pointing to JSON metadata
+    pub description: String,      // Max 256 chars
+    pub duration_seconds: i64,    // 86400 = 24h, 172800 = 48h, 604800 = 7 days
+    pub max_contribution: u64,    // 0 = no limit; in lamports
+    pub twitter: String,
+    pub telegram: String,
+    pub website: String,
+}
+```
+
+**Accounts:**
+```rust
+#[derive(Accounts)]
+#[instruction(params: InitializePresaleParams)]
+pub struct InitializePresale<'info> {
+    #[account(mut)]
+    pub creator: Signer<'info>,
+
+    #[account(
+        init,
+        payer = creator,
+        space = PRESALE_STATE_SIZE,
+        seeds = [b"presale", mint.key().as_ref()],
+        bump
+    )]
+    pub presale_state: Account<'info, PresaleState>,
+
+    #[account(
+        init,
+        payer = creator,
+        mint::decimals = 6,
+        mint::authority = presale_state,
+        mint::freeze_authority = presale_state,
+    )]
+    pub mint: Account<'info, Mint>,
+
+    #[account(
+        init,
+        payer = creator,
+        token::mint = mint,
+        token::authority = presale_state,
+        seeds = [b"token_vault", mint.key().as_ref()],
+        bump
+    )]
+    pub token_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: This is the platform treasury wallet (hardcoded in program constants)
+    #[account(mut, constraint = treasury.key() == TREASURY_PUBKEY)]
+    pub treasury: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub rent: Sysvar<'info, Rent>,
+
+    // Metaplex accounts for on-chain metadata
+    /// CHECK: Checked by Metaplex program
+    #[account(mut)]
+    pub metadata: UncheckedAccount<'info>,
+    /// CHECK: Metaplex program
+    pub token_metadata_program: UncheckedAccount<'info>,
+}
+```
+
+**Logic:**
+```rust
+pub fn handler(ctx: Context<InitializePresale>, params: InitializePresaleParams) -> Result<()> {
+    // Validate params
+    require!(params.token_name.len() <= 32, PresaleError::NameTooLong);
+    require!(params.token_ticker.len() <= 10, PresaleError::TickerTooLong);
+    require!(params.duration_seconds >= 3600, PresaleError::DurationTooShort);
+    require!(params.duration_seconds <= 604800, PresaleError::DurationTooLong);
+
+    let launch_fee: u64 = 1_000_000_000; // 1 SOL
+
+    // Transfer launch fee to treasury
+    anchor_lang::system_program::transfer(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.creator.to_account_info(),
+                to: ctx.accounts.treasury.to_account_info(),
+            },
+        ),
+        launch_fee,
+    )?;
+
+    let total_supply: u64 = 1_000_000_000_000_000; // 1B tokens with 6 decimals
+
+    // Mint 100% of supply to token_vault PDA
+    // (PDA is the mint authority, so we sign with PDA seeds)
+    let mint_key = ctx.accounts.mint.key();
+    let seeds = &[b"presale", mint_key.as_ref(), &[ctx.bumps.presale_state]];
+    let signer = &[&seeds[..]];
+
+    token::mint_to(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            token::MintTo {
+                mint: ctx.accounts.mint.to_account_info(),
+                to: ctx.accounts.token_vault.to_account_info(),
+                authority: ctx.accounts.presale_state.to_account_info(),
+            },
+            signer,
+        ),
+        total_supply,
+    )?;
+
+    // Create on-chain metadata via Metaplex
+    // CPI to token metadata program
+    // (use mpl_token_metadata::instruction::create_metadata_accounts_v3)
+
+    let now = Clock::get()?.unix_timestamp;
+
+    let state = &mut ctx.accounts.presale_state;
+    state.mint = ctx.accounts.mint.key();
+    state.token_name = params.token_name;
+    state.token_ticker = params.token_ticker;
+    state.token_uri = params.token_uri;
+    state.description = params.description;
+    state.creator = ctx.accounts.creator.key();
+    state.raise_target = 85_000_000_000; // 85 SOL in lamports
+    state.total_supply = total_supply;
+    state.lp_tokens_amount = total_supply / 2;
+    state.distribution_amount = total_supply / 2;
+    state.total_raised = 0;
+    state.total_contributors = 0;
+    state.start_time = now;
+    state.end_time = now + params.duration_seconds;
+    state.launched = false;
+    state.refund_enabled = false;
+    state.tokens_per_lamport_x64 = 0;
+    state.vault_bump = ctx.bumps.presale_state; // store separately if needed
+    state.token_vault_bump = ctx.bumps.token_vault;
+    state.state_bump = ctx.bumps.presale_state;
+    state.twitter = params.twitter;
+    state.telegram = params.telegram;
+    state.website = params.website;
+
+    emit!(PresaleCreated {
+        mint: ctx.accounts.mint.key(),
+        creator: ctx.accounts.creator.key(),
+        end_time: state.end_time,
+    });
+
+    Ok(())
+}
+```
+
+---
+
+### 2. `contribute`
+
+User contributes SOL to the presale vault.
+
+```rust
+pub fn contribute(ctx: Context<Contribute>, amount_lamports: u64) -> Result<()>
+```
+
+**Accounts:**
+```rust
+#[derive(Accounts)]
+pub struct Contribute<'info> {
+    #[account(mut)]
+    pub contributor: Signer<'info>,
+
+    pub mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        seeds = [b"presale", mint.key().as_ref()],
+        bump = presale_state.state_bump,
+    )]
+    pub presale_state: Account<'info, PresaleState>,
+
+    /// CHECK: Native SOL vault PDA — we manage lamports directly
+    #[account(
+        mut,
+        seeds = [b"vault", mint.key().as_ref()],
+        bump,
+    )]
+    pub vault: UncheckedAccount<'info>,
+
+    #[account(
+        init_if_found,
+        payer = contributor,
+        space = CONTRIBUTION_STATE_SIZE,
+        seeds = [b"contribution", mint.key().as_ref(), contributor.key().as_ref()],
+        bump,
+    )]
+    pub contribution_state: Account<'info, ContributionState>,
+
+    /// CHECK: Treasury for platform fees
+    #[account(mut, constraint = treasury.key() == TREASURY_PUBKEY)]
+    pub treasury: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+```
+
+**Logic:**
+```rust
+pub fn handler(ctx: Context<Contribute>, amount_lamports: u64) -> Result<()> {
+    let state = &mut ctx.accounts.presale_state;
+    let now = Clock::get()?.unix_timestamp;
+
+    // Guards
+    require!(!state.launched, PresaleError::AlreadyLaunched);
+    require!(!state.refund_enabled, PresaleError::PresaleFailed);
+    require!(now < state.end_time, PresaleError::PresaleEnded);
+    require!(amount_lamports >= 10_000_000, PresaleError::AmountTooSmall); // 0.01 SOL minimum
+
+    // Platform fee: 1% of contribution
+    let platform_fee = amount_lamports / 100;
+    let net_amount = amount_lamports - platform_fee;
+
+    // Check max contribution per wallet
+    let contribution = &mut ctx.accounts.contribution_state;
+    if state.max_contribution > 0 {
+        require!(
+            contribution.amount_contributed + net_amount <= state.max_contribution,
+            PresaleError::ExceedsMaxContribution
+        );
+    }
+
+    // Check would not exceed raise target
+    require!(
+        state.total_raised + net_amount <= state.raise_target,
+        PresaleError::ExceedsRaiseTarget
+    );
+
+    // Transfer fee to treasury
+    anchor_lang::system_program::transfer(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.contributor.to_account_info(),
+                to: ctx.accounts.treasury.to_account_info(),
+            },
+        ),
+        platform_fee,
+    )?;
+
+    // Transfer net amount to vault
+    anchor_lang::system_program::transfer(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.contributor.to_account_info(),
+                to: ctx.accounts.vault.to_account_info(),
+            },
+        ),
+        net_amount,
+    )?;
+
+    // Update contribution state
+    if contribution.amount_contributed == 0 {
+        contribution.contributor = ctx.accounts.contributor.key();
+        contribution.mint = ctx.accounts.mint.key();
+        contribution.claimed = false;
+        contribution.refunded = false;
+        contribution.bump = ctx.bumps.contribution_state;
+        state.total_contributors += 1;
+    }
+    contribution.amount_contributed += net_amount;
+    state.total_raised += net_amount;
+
+    emit!(ContributionMade {
+        mint: ctx.accounts.mint.key(),
+        contributor: ctx.accounts.contributor.key(),
+        amount: net_amount,
+        total_raised: state.total_raised,
+    });
+
+    Ok(())
+}
+```
+
+---
+
+### 3. `withdraw_contribution`
+
+User exits early before launch. 3% penalty fee.
+
+```rust
+pub fn withdraw_contribution(ctx: Context<WithdrawContribution>) -> Result<()>
+```
+
+**Accounts:**
+```rust
+#[derive(Accounts)]
+pub struct WithdrawContribution<'info> {
+    #[account(mut)]
+    pub contributor: Signer<'info>,
+
+    pub mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        seeds = [b"presale", mint.key().as_ref()],
+        bump = presale_state.state_bump,
+    )]
+    pub presale_state: Account<'info, PresaleState>,
+
+    /// CHECK: Native SOL vault
+    #[account(
+        mut,
+        seeds = [b"vault", mint.key().as_ref()],
+        bump,
+    )]
+    pub vault: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"contribution", mint.key().as_ref(), contributor.key().as_ref()],
+        bump = contribution_state.bump,
+        constraint = contribution_state.contributor == contributor.key(),
+    )]
+    pub contribution_state: Account<'info, ContributionState>,
+
+    /// CHECK: Treasury
+    #[account(mut, constraint = treasury.key() == TREASURY_PUBKEY)]
+    pub treasury: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+```
+
+**Logic:**
+```rust
+pub fn handler(ctx: Context<WithdrawContribution>) -> Result<()> {
+    let state = &mut ctx.accounts.presale_state;
+    let contribution = &mut ctx.accounts.contribution_state;
+
+    require!(!state.launched, PresaleError::AlreadyLaunched);
+    require!(!contribution.refunded, PresaleError::AlreadyRefunded);
+    require!(contribution.amount_contributed > 0, PresaleError::NothingToWithdraw);
+
+    let amount = contribution.amount_contributed;
+    let penalty = amount * 3 / 100; // 3% penalty
+    let return_amount = amount - penalty;
+
+    let mint_key = ctx.accounts.mint.key();
+    let vault_seeds = &[b"vault", mint_key.as_ref(), &[ctx.bumps.vault]];
+    let signer = &[&vault_seeds[..]];
+
+    // Send penalty to treasury
+    // Note: vault is a native SOL account (not a system account), so we manipulate lamports
+    **ctx.accounts.vault.try_borrow_mut_lamports()? -= penalty;
+    **ctx.accounts.treasury.try_borrow_mut_lamports()? += penalty;
+
+    // Return funds to contributor
+    **ctx.accounts.vault.try_borrow_mut_lamports()? -= return_amount;
+    **ctx.accounts.contributor.try_borrow_mut_lamports()? += return_amount;
+
+    state.total_raised -= amount;
+    state.total_contributors -= 1;
+    contribution.amount_contributed = 0;
+    contribution.early_withdrew = true;
+
+    emit!(ContributionWithdrawn {
+        mint: ctx.accounts.mint.key(),
+        contributor: ctx.accounts.contributor.key(),
+        amount_returned: return_amount,
+        penalty,
+    });
+
+    Ok(())
+}
+```
+
+---
+
+### 4. `launch_presale`
+
+Creates a **Meteora DAMM v2** pool via `initialize_customizable_pool`, adds liquidity, **`permanent_lock_position`** (no LP burn), records `pool` / `position_nft_mint`, sets `tokens_per_lamport_x64`, `launched = true`.
+
+**Full account struct, fee scheduler params, WSOL wrap/close, and CPI pseudocode** are in [`meteora`](meteora) (sections *Updated Anchor Program: `launch_presale` Instruction* and *Program IDs*).
+
+Summary steps:
+
+1. Move **85 SOL** from `vault` → `presale_state`’s WSOL ATA; `sync_native`.
+2. CPI **`initialize_customizable_pool`** with 85 SOL (WSOL) + **500M tokens** from `token_vault`, anti-sniper fee params, `collectFeeMode` = OnlyB (SOL fees).
+3. CPI **`permanent_lock_position`** so liquidity cannot be removed; position NFT stays with `presale_state` (ATA).
+4. Close empty WSOL ATA if applicable; update `PresaleState` and emit `PresaleLaunched { mint, pool, position_nft, ... }`.
+
+`position_nft_mint` is a **new Keypair** supplied by the client as **signer** (see [`meteora`](meteora) TypeScript section).
+
+---
+
+### 5. `claim_pool_fees`
+
+Pulls accumulated LP trading fees from DAMM v2 (`claim_fee` CPI) into **`fee_vault`** (unwrap WSOL → native SOL) and updates **`fee_pool_per_share_x64`** (and optional `fee_pool_balance`). See [`meteora`](meteora) *New Instruction: `claim_pool_fees`*.
+
+---
+
+### 6. `collect_my_fees`
+
+Contributor pull: pro-rata SOL from `fee_vault` using **`fee_debt_x64` / `fee_pool_per_share_x64`** (MasterChef-style). See [`meteora`](meteora) *collect_my_fees*.
+
+---
+
+### 7. `claim_tokens`
+
+After launch, contributors claim their pro-rata token allocation.
+
+```rust
+pub fn claim_tokens(ctx: Context<ClaimTokens>) -> Result<()>
+```
+
+**Accounts:**
+```rust
+#[derive(Accounts)]
+pub struct ClaimTokens<'info> {
+    #[account(mut)]
+    pub contributor: Signer<'info>,
+
+    pub mint: Account<'info, Mint>,
+
+    #[account(
+        seeds = [b"presale", mint.key().as_ref()],
+        bump = presale_state.state_bump,
+        constraint = presale_state.launched,
+    )]
+    pub presale_state: Account<'info, PresaleState>,
+
+    #[account(
+        mut,
+        seeds = [b"token_vault", mint.key().as_ref()],
+        bump = presale_state.token_vault_bump,
+    )]
+    pub token_vault: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"contribution", mint.key().as_ref(), contributor.key().as_ref()],
+        bump = contribution_state.bump,
+        constraint = contribution_state.contributor == contributor.key(),
+        constraint = !contribution_state.claimed @ PresaleError::AlreadyClaimed,
+    )]
+    pub contribution_state: Account<'info, ContributionState>,
+
+    #[account(
+        init_if_needed,
+        payer = contributor,
+        associated_token::mint = mint,
+        associated_token::authority = contributor,
+    )]
+    pub contributor_token_account: Account<'info, TokenAccount>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+}
+```
+
+**Logic:**
+```rust
+pub fn handler(ctx: Context<ClaimTokens>) -> Result<()> {
+    let state = &ctx.accounts.presale_state;
+    let contribution = &mut ctx.accounts.contribution_state;
+
+    // Calculate tokens owed using fixed-point math
+    // tokens = (amount_contributed * tokens_per_lamport_x64) >> 64
+    let tokens_owed = ((contribution.amount_contributed as u128)
+        * state.tokens_per_lamport_x64
+        >> 64) as u64;
+
+    require!(tokens_owed > 0, PresaleError::NothingToClaim);
+
+    let mint_key = ctx.accounts.mint.key();
+    let seeds = &[b"presale", mint_key.as_ref(), &[state.state_bump]];
+    let signer = &[&seeds[..]];
+
+    token::transfer(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            token::Transfer {
+                from: ctx.accounts.token_vault.to_account_info(),
+                to: ctx.accounts.contributor_token_account.to_account_info(),
+                authority: ctx.accounts.presale_state.to_account_info(),
+            },
+            signer,
+        ),
+        tokens_owed,
+    )?;
+
+    contribution.claimed = true;
+
+    emit!(TokensClaimed {
+        mint: ctx.accounts.mint.key(),
+        contributor: ctx.accounts.contributor.key(),
+        tokens_amount: tokens_owed,
+    });
+
+    Ok(())
+}
+```
+
+---
+
+### 8. `enable_refund` and `claim_refund`
+
+Two-step: first admin/crank enables refunds, then each user claims.
+
+```rust
+// Called by platform or anyone after end_time if goal not met
+pub fn enable_refund(ctx: Context<EnableRefund>) -> Result<()> {
+    let state = &mut ctx.accounts.presale_state;
+    let now = Clock::get()?.unix_timestamp;
+
+    require!(!state.launched, PresaleError::AlreadyLaunched);
+    require!(now > state.end_time, PresaleError::PresaleStillActive);
+    require!(state.total_raised < state.raise_target, PresaleError::GoalWasMet);
+    require!(!state.refund_enabled, PresaleError::RefundsAlreadyEnabled);
+
+    state.refund_enabled = true;
+    Ok(())
+}
+
+// Called by each contributor to get their SOL back
+pub fn claim_refund(ctx: Context<ClaimRefund>) -> Result<()> {
+    let state = &mut ctx.accounts.presale_state;
+    let contribution = &mut ctx.accounts.contribution_state;
+
+    require!(state.refund_enabled, PresaleError::RefundsNotEnabled);
+    require!(!contribution.refunded, PresaleError::AlreadyRefunded);
+    require!(contribution.amount_contributed > 0, PresaleError::NothingToWithdraw);
+
+    let amount = contribution.amount_contributed;
+
+    // Drain from vault to contributor (no penalty on failed presale)
+    **ctx.accounts.vault.try_borrow_mut_lamports()? -= amount;
+    **ctx.accounts.contributor.try_borrow_mut_lamports()? += amount;
+
+    contribution.refunded = true;
+    contribution.amount_contributed = 0;
+
+    Ok(())
+}
+```
+
+---
+
+## WSOL Handling for DAMM v2
+
+DAMM v2 uses SPL tokens (WSOL + project mint). Wrap **85 SOL** from `vault` into `presale_state`’s WSOL ATA, `sync_native`, then CPI pool init. After Meteora instructions, close the WSOL ATA if empty to reclaim rent (see [`meteora`](meteora) snippet).
+
+---
+
+## Meteora DAMM v2 Integration
+
+**Program ID:** `cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG`  
+**Pool authority PDA:** `HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC`  
+
+**Customizable pool PDA seeds:** `[tokenAMint, tokenBMint]` (lexicographic sort; WSOL is usually token A).
+
+**Dependency (optional):**
+```toml
+# From MeteoraAg/damm-v2 — verify package path / rev in repo
+cp-amm = { git = "https://github.com/MeteoraAg/damm-v2", package = "cp-amm", features = ["cpi"] }
+```
+
+Or build raw CPI from the published IDL. Pool **fee scheduler** and **`claim_fee`** layouts: see [`meteora`](meteora) and [Meteora docs](https://docs.meteora.ag/developer-guide/guides/damm-v2/overview).
+
+---
+
+## Program Constants
+
+```rust
+// lib.rs
+pub mod constants {
+    use anchor_lang::prelude::*;
+
+    pub const TREASURY_PUBKEY: Pubkey = pubkey!("YOUR_TREASURY_WALLET_ADDRESS_HERE");
+    pub const RAISE_TARGET: u64 = 85_000_000_000;     // 85 SOL in lamports
+    pub const LAUNCH_FEE: u64 = 1_000_000_000;        // 1 SOL
+    pub const PLATFORM_FEE_BPS: u64 = 100;            // 1% = 100 basis points
+    pub const EARLY_WITHDRAWAL_PENALTY_BPS: u64 = 300; // 3%
+    pub const TOTAL_SUPPLY: u64 = 1_000_000_000_000_000; // 1B with 6 decimals
+    pub const MIN_CONTRIBUTION: u64 = 10_000_000;     // 0.01 SOL
+    pub const MIN_DURATION: i64 = 3_600;              // 1 hour
+    pub const MAX_DURATION: i64 = 604_800;            // 7 days
+
+    pub const WSOL_MINT: Pubkey = pubkey!("So11111111111111111111111111111111111111112");
+    pub const DAMM_V2_PROGRAM: Pubkey = pubkey!("cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG");
+    pub const DAMM_V2_POOL_AUTHORITY: Pubkey = pubkey!("HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC");
+    pub const TOKEN_METADATA_PROGRAM: Pubkey = pubkey!("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+}
+```
+
+---
+
+## Error Codes
+
+```rust
+#[error_code]
+pub enum PresaleError {
+    #[msg("Token name exceeds 32 characters")]
+    NameTooLong,
+    #[msg("Token ticker exceeds 10 characters")]
+    TickerTooLong,
+    #[msg("Description exceeds 256 characters")]
+    DescriptionTooLong,
+    #[msg("Duration must be between 1 hour and 7 days")]
+    DurationTooShort,
+    #[msg("Duration must be between 1 hour and 7 days")]
+    DurationTooLong,
+    #[msg("Contribution below minimum (0.01 SOL)")]
+    AmountTooSmall,
+    #[msg("Contribution would exceed raise target")]
+    ExceedsRaiseTarget,
+    #[msg("Contribution exceeds per-wallet max")]
+    ExceedsMaxContribution,
+    #[msg("Presale has already launched")]
+    AlreadyLaunched,
+    #[msg("Presale ended without meeting goal — refunds enabled")]
+    PresaleFailed,
+    #[msg("Presale has ended")]
+    PresaleEnded,
+    #[msg("Presale is still active")]
+    PresaleStillActive,
+    #[msg("Raise target has not been met")]
+    RaiseTargetNotMet,
+    #[msg("Goal was met — refunds not available")]
+    GoalWasMet,
+    #[msg("Refunds are not enabled")]
+    RefundsNotEnabled,
+    #[msg("Refunds are already enabled")]
+    RefundsAlreadyEnabled,
+    #[msg("Already refunded")]
+    AlreadyRefunded,
+    #[msg("No contribution to withdraw")]
+    NothingToWithdraw,
+    #[msg("Tokens already claimed")]
+    AlreadyClaimed,
+    #[msg("Nothing to claim")]
+    NothingToClaim,
+    #[msg("Invalid treasury account")]
+    InvalidTreasury,
+    #[msg("Meteora DAMM v2 CPI failed")]
+    MeteoraError,
+    #[msg("Presale not launched")]
+    NotLaunched,
+    #[msg("Arithmetic overflow")]
+    ArithmeticOverflow,
+}
+```
+
+---
+
+## Events
+
+```rust
+#[event]
+pub struct PresaleCreated {
+    pub mint: Pubkey,
+    pub creator: Pubkey,
+    pub end_time: i64,
+}
+
+#[event]
+pub struct ContributionMade {
+    pub mint: Pubkey,
+    pub contributor: Pubkey,
+    pub amount: u64,
+    pub total_raised: u64,
+}
+
+#[event]
+pub struct ContributionWithdrawn {
+    pub mint: Pubkey,
+    pub contributor: Pubkey,
+    pub amount_returned: u64,
+    pub penalty: u64,
+}
+
+#[event]
+pub struct PresaleLaunched {
+    pub mint: Pubkey,
+    pub pool: Pubkey,
+    pub position_nft: Pubkey,
+    pub total_raised: u64,
+    pub lp_amount: u64,
+    pub distribution_amount: u64,
+}
+
+#[event]
+pub struct TokensClaimed {
+    pub mint: Pubkey,
+    pub contributor: Pubkey,
+    pub tokens_amount: u64,
+}
+```
+
+---
+
+## Program File Structure
+
+```
+programs/moonpad/
+├── src/
+│   ├── lib.rs                    # Program entry, declare_id!, instruction routing
+│   ├── constants.rs              # All constants (treasury, fees, targets)
+│   ├── errors.rs                 # PresaleError enum
+│   ├── events.rs                 # All #[event] structs
+│   ├── state/
+│   │   ├── mod.rs
+│   │   ├── presale_state.rs      # PresaleState account
+│   │   └── contribution_state.rs # ContributionState account
+│   └── instructions/
+│       ├── mod.rs
+│       ├── initialize_presale.rs
+│       ├── contribute.rs
+│       ├── withdraw_contribution.rs
+│       ├── launch_presale.rs     # DAMM v2 CPI
+│       ├── claim_pool_fees.rs
+│       ├── collect_my_fees.rs
+│       ├── claim_tokens.rs
+│       ├── enable_refund.rs
+│       └── claim_refund.rs
+├── Cargo.toml
+└── Xargo.toml
+```
+
+**lib.rs skeleton:**
+```rust
+use anchor_lang::prelude::*;
+
+pub mod constants;
+pub mod errors;
+pub mod events;
+pub mod instructions;
+pub mod state;
+
+use instructions::*;
+
+declare_id!("YOUR_PROGRAM_ID_HERE");
+
+#[program]
+pub mod moonpad {
+    use super::*;
+
+    pub fn initialize_presale(
+        ctx: Context<InitializePresale>,
+        params: InitializePresaleParams,
+    ) -> Result<()> {
+        instructions::initialize_presale::handler(ctx, params)
+    }
+
+    pub fn contribute(ctx: Context<Contribute>, amount_lamports: u64) -> Result<()> {
+        instructions::contribute::handler(ctx, amount_lamports)
+    }
+
+    pub fn withdraw_contribution(ctx: Context<WithdrawContribution>) -> Result<()> {
+        instructions::withdraw_contribution::handler(ctx)
+    }
+
+    pub fn launch_presale(ctx: Context<LaunchPresale>) -> Result<()> {
+        instructions::launch_presale::handler(ctx)
+    }
+
+    pub fn claim_pool_fees(ctx: Context<ClaimPoolFees>) -> Result<()> {
+        instructions::claim_pool_fees::handler(ctx)
+    }
+
+    pub fn collect_my_fees(ctx: Context<CollectMyFees>) -> Result<()> {
+        instructions::collect_my_fees::handler(ctx)
+    }
+
+    pub fn claim_tokens(ctx: Context<ClaimTokens>) -> Result<()> {
+        instructions::claim_tokens::handler(ctx)
+    }
+
+    pub fn enable_refund(ctx: Context<EnableRefund>) -> Result<()> {
+        instructions::enable_refund::handler(ctx)
+    }
+
+    pub fn claim_refund(ctx: Context<ClaimRefund>) -> Result<()> {
+        instructions::claim_refund::handler(ctx)
+    }
+}
+```
+
+---
+
+## Cargo.toml
+
+```toml
+[package]
+name = "moonpad"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "moonpad"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = { version = "0.31.0", features = ["init-if-needed"] }
+anchor-spl = { version = "0.31.0", features = ["token", "associated_token", "metadata"] }
+mpl-token-metadata = "4.1.2"
+# cp-amm = { git = "https://github.com/MeteoraAg/damm-v2", package = "cp-amm", features = ["cpi"] }
+```
+
+---
+
+## Testing
+
+Use Anchor's test framework with `bankrun` or `solana-test-validator`.
+
+```typescript
+// tests/moonpad.ts
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { Moonpad } from "../target/types/moonpad";
+import { Keypair, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
+import { assert } from "chai";
+
+describe("moonpad", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+  const program = anchor.workspace.Moonpad as Program<Moonpad>;
+
+  let mint: Keypair;
+  let presaleState: PublicKey;
+  let vault: PublicKey;
+  let tokenVault: PublicKey;
+
+  before(async () => {
+    mint = Keypair.generate();
+    [presaleState] = PublicKey.findProgramAddressSync(
+      [Buffer.from("presale"), mint.publicKey.toBuffer()],
+      program.programId
+    );
+    [vault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault"), mint.publicKey.toBuffer()],
+      program.programId
+    );
+    [tokenVault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("token_vault"), mint.publicKey.toBuffer()],
+      program.programId
+    );
+  });
+
+  it("initializes a presale", async () => {
+    await program.methods
+      .initializePresale({
+        tokenName: "Test Token",
+        tokenTicker: "TEST",
+        tokenUri: "https://ipfs.io/ipfs/...",
+        description: "A test token",
+        durationSeconds: new anchor.BN(86400),
+        maxContribution: new anchor.BN(0),
+        twitter: "",
+        telegram: "",
+        website: "",
+      })
+      .accounts({
+        creator: provider.wallet.publicKey,
+        presaleState,
+        mint: mint.publicKey,
+        tokenVault,
+        treasury: TREASURY_PUBKEY,
+        // ... other accounts
+      })
+      .signers([mint])
+      .rpc();
+
+    const state = await program.account.presaleState.fetch(presaleState);
+    assert.equal(state.tokenName, "Test Token");
+    assert.equal(state.launched, false);
+  });
+
+  it("accepts contributions", async () => {
+    const contributionAmount = new anchor.BN(1 * LAMPORTS_PER_SOL);
+    // ... contribute logic
+    const state = await program.account.presaleState.fetch(presaleState);
+    assert.ok(state.totalRaised.gt(new anchor.BN(0)));
+  });
+
+  it("rejects contributions above raise target", async () => {
+    // Try to contribute 90 SOL when only 85 allowed
+    // Should throw ExceedsRaiseTarget
+  });
+
+  it("allows early withdrawal with penalty", async () => {
+    // Contribute, then withdraw
+    // Assert 3% penalty deducted
+  });
+
+  it("launches when target met", async () => {
+    // Requires Meteora DAMM v2 on cluster or a mock program
+  });
+});
+```
+
+**Testing DAMM v2 on localnet:** Use devnet with live Meteora program, or deploy DAMM v2 + mock CPI for CI.
+
+---
+
+## Deployment Checklist
+
+1. `anchor build` — generates IDL and program binary
+2. `anchor deploy --provider.cluster devnet` — deploy to devnet first
+3. Update `declare_id!` with the deployed program ID
+4. Set `TREASURY_PUBKEY` constant to your actual wallet
+5. Run full test suite on devnet
+6. Audit (Ottersec, Sec3, or Sherlock before mainnet)
+7. `anchor deploy --provider.cluster mainnet-beta`
+8. Verify program on SolanaFM / explorer
+
+---
+
+## Security Considerations
+
+- **Reentrancy:** Anchor's borrow checker prevents this; all mutable account borrows are exclusive
+- **PDA authority:** Only the program can sign for PDA accounts — no external authority issues
+- **Integer overflow:** Use `checked_add`, `checked_mul` for all arithmetic, or enable overflow-checks in Cargo
+- **Signer checks:** All sensitive instructions require the correct signer via Anchor constraints
+- **Meteora CPI:** Verify DAMM v2 program ID and pool PDAs at runtime — don't trust arbitrary accounts
+- **Vault draining:** The vault PDA is a raw system account; lamport manipulation must always leave enough for rent
+- **Permanent lock:** After `permanent_lock_position`, liquidity cannot be removed; verify position NFT owner
+
+Add this to Cargo.toml for overflow protection:
+```toml
+[profile.release]
+overflow-checks = true
+```

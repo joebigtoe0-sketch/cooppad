@@ -1,0 +1,11 @@
+{
+  "name": "launchpad",
+  "private": true,
+  "description": "Workspace root — Next.js app lives in moonpad/",
+  "scripts": {
+    "dev": "cd moonpad && npm run dev",
+    "build": "cd moonpad && npm run build",
+    "start": "cd moonpad && npm run start",
+    "lint": "cd moonpad && npm run lint"
+  }
+}

@@ -1,0 +1,6 @@
+moonpad/.env.local
+moonpad/.keys/
+moonpad/.env
+.env.local
+.keys/
+.data/

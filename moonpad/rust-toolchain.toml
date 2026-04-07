@@ -1,0 +1,4 @@
+[toolchain]
+# Default Rust for this repo. Anchor/Solana BPF still uses its own (older) Cargo to read Cargo.lock — keep lock format v3 unless Solana tools are updated.
+channel = "stable"
+profile = "minimal"

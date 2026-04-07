@@ -1,0 +1,662 @@
+# MoonPad — Meteora DAMM v2 Integration (Replaces Raydium Sections)
+
+## Why DAMM v2 and What Changes
+
+This document replaces the Raydium CPI sections in `anchor-program-spec.md` and
+`platform-fullstack-spec.md`. Everything else in those documents stays the same.
+
+---
+
+## Pool Choice: DAMM v2 `initialize_customizable_pool`
+
+Meteora has four pool types. Here is why DAMM v2 with `initialize_customizable_pool`
+is the correct one for MoonPad:
+
+**DLMM** — Bin-based concentrated liquidity. Expensive to create (~0.25 SOL per pool
+in rent), complex bin management, overkill for a memetoken launch. Skip.
+
+**DAMM v1** — The original constant-product AMM. Fees auto-compound back into the
+pool — you cannot claim them separately as SOL. This means you cannot distribute fees
+to presale contributors. Skip.
+
+**DBC (Dynamic Bonding Curve)** — Bonding curve from zero supply, not a presale
+model. Skip.
+
+**DAMM v2 with `initialize_customizable_pool`** — This is the one:
+- Full-range constant-product pool (x·y=k), same pricing model as Uniswap v2 / old Raydium
+- LP position is represented as a **position NFT** — whoever holds it can claim trading fees
+- `collectFeeMode: 1` (OnlyB) means all LP fees accumulate as SOL only — trivial to distribute
+- Supports `permanent_lock_position` which locks the liquidity forever but still allows `claim_fee` from that locked position
+- Creates a pool for only ~0.022 SOL in rent vs ~0.5 SOL for Raydium — massively cheaper
+- No config key required: pool PDA is just `[tokenAMint, tokenBMint]`
+- Immediate trading activation (set `activationPoint = null`)
+- Already integrated with Jupiter aggregator for routing
+
+**The key insight on fees:** In DAMM v2, when you permanently lock LP liquidity, you
+KEEP the ability to claim trading fees from it. This is unique to Meteora. So MoonPad's
+presale contract permanently locks the LP (rug-proof) but can call `claim_fee` on the
+position at any time. Those collected SOL fees then get distributed to presale
+contributors pro-rata. This is the "LP rewards" feature the user wants.
+
+---
+
+## Program IDs and Addresses
+
+```
+DAMM v2 Program:    cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG  (mainnet + devnet same)
+Pool Authority PDA: HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC
+WSOL Mint:          So11111111111111111111111111111111111111112
+```
+
+Pool PDA seeds (DAMM v2 customizable):
+```
+seeds = [tokenAMint.key(), tokenBMint.key()]
+program = cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG
+```
+Note: token ordering — token with the lexicographically smaller pubkey is token A.
+WSOL (`So111...112`) will usually be token A since its pubkey sorts low.
+
+---
+
+## Fee Configuration for Memetokens
+
+Use the anti-sniper fee scheduler. For a memetoken presale, this is ideal:
+
+```
+startingFeeBps:  5000   (50% fee at launch — destroys snipers)
+endingFeeBps:    100    (1% fee after decay period)
+numberOfPeriod:  120    (120 steps)
+totalDuration:   7200   (2 hours to decay from 50% → 1%)
+feeSchedulerMode: 1     (Exponential decay — drops fast initially, then slows)
+dynamicFee:      true   (adds up to 20% of minBaseFeeBps on top during volatility)
+collectFeeMode:  1      (OnlyB = SOL fees only — simplest to distribute to contributors)
+```
+
+This means:
+- First few minutes of trading: ~50% fee — bots and snipers get destroyed
+- After 2 hours: settles at 1% base fee + dynamic volatility component
+- All fees accumulate as SOL in the position, claimable by the position NFT holder
+
+You can use one of the pre-existing static configs (indices 24-31 in the DAMM v2 docs
+have a similar schedule starting at 50% decaying to 2.5%) or configure your own
+via `initialize_customizable_pool` which takes inline fee params.
+
+**Recommendation: use `initialize_customizable_pool`** since it does not require a config
+key and you control all fee params directly.
+
+---
+
+## Updated Anchor Program: `launch_presale` Instruction
+
+Replace the entire Raydium CPI section with the following.
+
+### What the launch does
+
+1. Wrap 85 SOL from the vault into WSOL
+2. Call DAMM v2 `initialize_customizable_pool` — creates pool + position NFT
+3. Call DAMM v2 `permanent_lock_position` — locks liquidity forever (rug-proof)
+4. Store the position NFT pubkey in `presale_state` so fees can be claimed later
+5. Set `tokens_per_lamport_x64` for distribution, set `launched = true`
+6. Transfer 50% of tokens to token_vault for contributors to claim (same as before)
+
+### Account struct additions to PresaleState
+
+```rust
+// Add these fields to PresaleState:
+pub position_nft_mint: Pubkey,   // The NFT mint that represents the LP position
+pub pool: Pubkey,                // The DAMM v2 pool address
+pub total_fees_claimed: u64,     // Running total of SOL fees claimed (for accounting)
+```
+
+### LaunchPresale accounts (DAMM v2 version)
+
+```rust
+#[derive(Accounts)]
+pub struct LaunchPresale<'info> {
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
+    pub mint: Account<'info, Mint>,   // The token mint (token B in the pool)
+
+    #[account(
+        mut,
+        seeds = [b"presale", mint.key().as_ref()],
+        bump = presale_state.state_bump,
+    )]
+    pub presale_state: Account<'info, PresaleState>,
+
+    /// CHECK: SOL vault
+    #[account(mut, seeds = [b"vault", mint.key().as_ref()], bump)]
+    pub vault: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"token_vault", mint.key().as_ref()],
+        bump = presale_state.token_vault_bump,
+    )]
+    pub token_vault: Account<'info, TokenAccount>,
+
+    // WSOL ATA for presale_state PDA (needed to wrap SOL before pool creation)
+    #[account(mut)]
+    pub wsol_ata: Account<'info, TokenAccount>,
+
+    // DAMM v2 pool accounts
+    /// CHECK: DAMM v2 program
+    pub damm_v2_program: UncheckedAccount<'info>,
+
+    /// CHECK: Pool state PDA — derived from [tokenAMint, tokenBMint] by DAMM v2
+    #[account(mut)]
+    pub pool: UncheckedAccount<'info>,
+
+    // Position NFT mint — generated as a new Keypair, passed in as signer
+    #[account(mut)]
+    pub position_nft_mint: Signer<'info>,
+
+    /// CHECK: Position account — PDA of DAMM v2 derived from position NFT mint
+    #[account(mut)]
+    pub position: UncheckedAccount<'info>,
+
+    // presale_state's ATA for the position NFT (will receive the NFT)
+    #[account(mut)]
+    pub position_nft_account: Account<'info, TokenAccount>,
+
+    // DAMM v2's internal vaults
+    /// CHECK: DAMM v2 token A vault (WSOL)
+    #[account(mut)]
+    pub pool_token_a_vault: UncheckedAccount<'info>,
+    /// CHECK: DAMM v2 token B vault (our token)
+    #[account(mut)]
+    pub pool_token_b_vault: UncheckedAccount<'info>,
+
+    /// CHECK: DAMM v2 pool authority PDA
+    pub pool_authority: UncheckedAccount<'info>,
+
+    /// CHECK: WSOL mint
+    pub wsol_mint: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub rent: Sysvar<'info, Rent>,
+}
+```
+
+### launch_presale handler (DAMM v2)
+
+```rust
+pub fn handler(ctx: Context<LaunchPresale>) -> Result<()> {
+    let state = &mut ctx.accounts.presale_state;
+
+    require!(!state.launched, PresaleError::AlreadyLaunched);
+    require!(state.total_raised >= state.raise_target, PresaleError::RaiseTargetNotMet);
+
+    let mint_key = ctx.accounts.mint.key();
+    let presale_seeds = &[b"presale", mint_key.as_ref(), &[state.state_bump]];
+    let signer = &[&presale_seeds[..]];
+
+    // ── Step 1: Wrap SOL into WSOL ────────────────────────────────────────────
+    // Transfer 85 SOL from vault to presale_state's WSOL ATA, then sync_native
+    **ctx.accounts.vault.try_borrow_mut_lamports()? -= 85_000_000_000;
+    **ctx.accounts.wsol_ata.try_borrow_mut_lamports()? += 85_000_000_000;
+
+    token::sync_native(CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        token::SyncNative { account: ctx.accounts.wsol_ata.to_account_info() },
+        signer,
+    ))?;
+
+    // ── Step 2: CPI → DAMM v2 initialize_customizable_pool ───────────────────
+    // Build the instruction data manually using DAMM v2's IDL discriminator,
+    // or use the damm-v2 Rust SDK crate if added as a dependency.
+    //
+    // Key parameters:
+    //   tokenAAmount = 85_000_000_000  (85 WSOL)
+    //   tokenBAmount = 500_000_000_000_000  (500M tokens, 50% of supply)
+    //   sqrtMinPrice = MIN_SQRT_PRICE  (full range)
+    //   sqrtMaxPrice = MAX_SQRT_PRICE  (full range)
+    //   poolFees:
+    //     baseFee.cliffFeeNumerator = 500_000_000  (50% cliff)
+    //     baseFee.numberOfPeriod = 120
+    //     baseFee.reductionFactor = 432  (exponential, decays to ~1% in 2h)
+    //     baseFee.periodFrequency = 60   (seconds)
+    //     baseFee.feeSchedulerMode = 1   (exponential)
+    //     dynamicFee = enabled (default params)
+    //     protocolFeePercent = 20        (Meteora takes 20% of LP fee — standard)
+    //   collectFeeMode = 1  (OnlyB = SOL fees only)
+    //   activationType = 1  (timestamp)
+    //   activationPoint = 0 (open immediately)
+    //   hasAlphaVault = false
+
+    // After the CPI, the pool is created and the position NFT is minted
+    // to presale_state's position_nft_account.
+
+    // ── Step 3: Permanently lock the position ─────────────────────────────────
+    // CPI → DAMM v2 permanent_lock_position
+    // This makes the liquidity unremovable — rug-proof.
+    // IMPORTANT: even with permanent lock, claim_fee still works on this position.
+    // That is the key Meteora feature that enables fee distribution to contributors.
+
+    // ── Step 4: Close WSOL ATA to recover rent ───────────────────────────────
+    token::close_account(CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        token::CloseAccount {
+            account: ctx.accounts.wsol_ata.to_account_info(),
+            destination: ctx.accounts.presale_state.to_account_info(),
+            authority: ctx.accounts.presale_state.to_account_info(),
+        },
+        signer,
+    ))?;
+
+    // ── Step 5: Record state ──────────────────────────────────────────────────
+    state.position_nft_mint = ctx.accounts.position_nft_mint.key();
+    state.pool = ctx.accounts.pool.key();
+    state.tokens_per_lamport_x64 = ((state.distribution_amount as u128) << 64)
+        / (state.total_raised as u128);
+    state.launched = true;
+
+    emit!(PresaleLaunched {
+        mint: ctx.accounts.mint.key(),
+        pool: ctx.accounts.pool.key(),
+        position_nft: ctx.accounts.position_nft_mint.key(),
+        total_raised: state.total_raised,
+        lp_amount: state.lp_tokens_amount,
+        distribution_amount: state.distribution_amount,
+    });
+
+    Ok(())
+}
+```
+
+---
+
+## New Instruction: `claim_pool_fees`
+
+This is a new instruction that does not exist in the Raydium version. It lets anyone
+(typically a crank or a contributor themselves) trigger a fee claim from the permanently
+locked DAMM v2 position, and distribute the collected SOL to contributors pro-rata.
+
+There are two viable distribution approaches:
+
+**Option A — Pull model (recommended):** The `claim_pool_fees` instruction claims SOL
+fees into a "fee vault" PDA. Contributors then call a separate `collect_my_fees`
+instruction that calculates their share and transfers it.
+
+**Option B — Push model:** A crank iterates over all contribution accounts and sends
+each contributor their share in one transaction batch. Hard to do atomically on Solana
+for large contributor counts.
+
+Use Option A.
+
+### New accounts/state needed
+
+Add to `PresaleState`:
+```rust
+pub fee_pool_balance: u64,          // Running total of unclaimed fees in the fee vault
+pub fee_pool_per_share_x64: u128,   // Accumulated fees per contributed lamport (fixed-point)
+```
+
+Add to `ContributionState`:
+```rust
+pub fee_debt_x64: u128,             // Contributor's fee debt (for incremental claim calc)
+pub fees_collected: u64,            // Total SOL fees this contributor has collected
+```
+
+### New fee vault PDA
+
+```
+seeds = [b"fee_vault", mint.key()]
+```
+This PDA receives claimed SOL from DAMM v2 and holds it until contributors pull.
+
+### claim_pool_fees instruction
+
+```rust
+pub fn claim_pool_fees(ctx: Context<ClaimPoolFees>) -> Result<()> {
+    // 1. CPI → DAMM v2 claim_fee using presale_state as position NFT holder
+    //    This sends accumulated SOL fees to the fee_vault PDA.
+    //
+    //    DAMM v2 claim_fee instruction accounts:
+    //    - pool
+    //    - position (the LP position account)
+    //    - position_nft_account (presale_state's ATA for the position NFT)
+    //    - position_nft_mint
+    //    - token_a_account (fee_vault's WSOL ATA — receives WSOL fees)
+    //    - token_b_account (not used with collectFeeMode=1)
+    //    - pool_token_a_vault
+    //    - pool_authority
+    //    - owner = presale_state (signer via PDA)
+
+    // 2. Unwrap WSOL → native SOL in the fee_vault
+    //    token::close_account on fee_vault's WSOL ATA → lamports go to fee_vault PDA
+
+    // 3. Update accumulator
+    let new_fees = /* lamports received */;
+    let state = &mut ctx.accounts.presale_state;
+    state.fee_pool_balance += new_fees;
+    // fee_pool_per_share_x64 += (new_fees << 64) / total_raised
+    state.fee_pool_per_share_x64 += ((new_fees as u128) << 64)
+        / (state.total_raised as u128);
+
+    Ok(())
+}
+```
+
+### collect_my_fees instruction
+
+```rust
+pub fn collect_my_fees(ctx: Context<CollectMyFees>) -> Result<()> {
+    let state = &ctx.accounts.presale_state;
+    let contribution = &mut ctx.accounts.contribution_state;
+
+    require!(state.launched, PresaleError::NotLaunched);
+    require!(contribution.amount_contributed > 0, PresaleError::NothingToClaim);
+
+    // Calculate pending fees
+    // pending = (amount_contributed * fee_pool_per_share_x64 >> 64) - fee_debt_x64 >> 64
+    let gross = ((contribution.amount_contributed as u128)
+        * state.fee_pool_per_share_x64)
+        >> 64;
+    let pending = (gross - contribution.fee_debt_x64) as u64;
+
+    if pending == 0 {
+        return Ok(());
+    }
+
+    // Transfer from fee_vault to contributor
+    **ctx.accounts.fee_vault.try_borrow_mut_lamports()? -= pending;
+    **ctx.accounts.contributor.try_borrow_mut_lamports()? += pending;
+
+    // Update debt
+    contribution.fee_debt_x64 = gross;
+    contribution.fees_collected += pending;
+
+    Ok(())
+}
+```
+
+The `fee_debt_x64` pattern (sometimes called "reward debt" or "per-share accumulator")
+is the standard Masterchef/SushiSwap pattern for O(1) per-user fee distribution without
+iterating all accounts.
+
+---
+
+## DAMM v2 Rust SDK Dependency
+
+```toml
+# Cargo.toml — add to dependencies:
+[dependencies]
+# Option A: use the official Rust SDK (CPI feature)
+damm-v2 = { git = "https://github.com/MeteoraAg/damm-v2", features = ["cpi"] }
+
+# Option B: build raw CPI using the IDL (avoids heavy dependency)
+# Encode instruction data manually from the IDL discriminator + borsh params
+```
+
+The DAMM v2 GitHub is at: https://github.com/MeteoraAg/damm-v2
+
+Key instruction discriminators you need (from the IDL):
+- `initialize_customizable_pool` — for creating the pool
+- `permanent_lock_position` — for permanently locking LP
+- `claim_fee` — for claiming accumulated trading fees
+
+**Important note on `pool_creator_authority`:** The DAMM v2 docs mention that for
+launchpads, Meteora can create a **private dynamic config** where only your program's
+PDA can create pools. This prevents front-running (someone seeing your initialize tx and
+front-running with the same mint pair to create the pool first). Reach out to Meteora
+on Discord to get a private config key assigned to your program's PDA authority. This is
+worth doing before mainnet launch.
+
+---
+
+## TypeScript SDK Changes (platform-fullstack-spec.md updates)
+
+### New dependency
+
+```json
+"@meteora-ag/cp-amm-sdk": "^1.3.7"
+```
+
+### lib/meteora.ts (new file)
+
+```typescript
+import { Connection, PublicKey } from "@solana/web3.js";
+import {
+  CpAmm,
+  CollectFeeMode,
+  BaseFeeMode,
+  ActivationType,
+  MIN_SQRT_PRICE,
+  MAX_SQRT_PRICE,
+  getBaseFeeParams,
+  getDynamicFeeParams,
+} from "@meteora-ag/cp-amm-sdk";
+import BN from "bn.js";
+
+export const DAMM_V2_PROGRAM = new PublicKey(
+  "cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG"
+);
+
+// Derive the DAMM v2 pool address given two token mints
+// Sort mints: lower pubkey = token A, higher = token B
+export function getDammV2PoolAddress(mintA: PublicKey, mintB: PublicKey) {
+  const [tokenA, tokenB] = mintA.toBuffer().compare(mintB.toBuffer()) < 0
+    ? [mintA, mintB]
+    : [mintB, mintA];
+
+  return PublicKey.findProgramAddressSync(
+    [tokenA.toBuffer(), tokenB.toBuffer()],
+    DAMM_V2_PROGRAM
+  );
+}
+
+// Fee params for anti-sniper memetoken launch
+export function getMemetokenFeeParams(tokenBDecimals: number) {
+  return {
+    baseFee: getBaseFeeParams(
+      {
+        baseFeeMode: BaseFeeMode.FeeTimeSchedulerExponential,
+        feeTimeSchedulerParam: {
+          startingFeeBps: 5000,  // 50% cliff — destroys snipers
+          endingFeeBps: 100,     // 1% floor
+          numberOfPeriod: 120,
+          totalDuration: 7200,   // 2 hours to decay
+        },
+      },
+      tokenBDecimals,
+      ActivationType.Timestamp
+    ),
+    compoundingFeeBps: 0,
+    padding: 0,
+    dynamicFee: getDynamicFeeParams(25), // 0.25% max dynamic add-on
+  };
+}
+
+// Used on the frontend to display estimated fee at current time
+export function estimateCurrentFeeBps(
+  launchTimestamp: number,
+  nowTimestamp: number
+): number {
+  const elapsed = nowTimestamp - launchTimestamp;
+  const decayDuration = 7200; // 2 hours
+  const progress = Math.min(1, elapsed / decayDuration);
+  // Exponential approximation
+  const fee = 5000 * Math.pow(100 / 5000, progress);
+  return Math.max(100, Math.round(fee));
+}
+```
+
+### buildLaunchPresaleTx update
+
+The `buildLaunchPresaleTx` function needs additional accounts for DAMM v2.
+The position NFT keypair is generated client-side and passed to the tx:
+
+```typescript
+export async function buildLaunchPresaleTx(
+  program: any,
+  caller: PublicKey,
+  mint: PublicKey,
+): Promise<{ tx: Transaction; positionNftKeypair: Keypair }> {
+  const positionNftKeypair = Keypair.generate();
+  const [presaleState] = findPresaleState(mint);
+  const [vault] = findVault(mint);
+  const [tokenVault] = findTokenVault(mint);
+  const [feeVault] = findFeeVault(mint); // new PDA
+
+  const WSOL = new PublicKey("So11111111111111111111111111111111111111112");
+  const wsolAta = getAssociatedTokenAddressSync(WSOL, presaleState, true);
+
+  // Derive DAMM v2 pool
+  const [pool] = getDammV2PoolAddress(WSOL, mint);
+
+  // Position account (DAMM v2 PDA from position NFT mint)
+  const [position] = PublicKey.findProgramAddressSync(
+    [Buffer.from("position"), positionNftKeypair.publicKey.toBuffer()],
+    DAMM_V2_PROGRAM
+  );
+
+  const positionNftAccount = getAssociatedTokenAddressSync(
+    positionNftKeypair.publicKey,
+    presaleState,
+    true
+  );
+
+  // ... build and return tx + positionNftKeypair
+  // Note: positionNftKeypair must sign the tx
+
+  return { tx, positionNftKeypair };
+}
+```
+
+### New: `buildClaimPoolFeesTx` and `buildCollectMyFeesTx`
+
+```typescript
+// Anyone can call this (crank or contributor) to pull fees from DAMM v2 into fee_vault
+export async function buildClaimPoolFeesTx(
+  program: any,
+  caller: PublicKey,
+  mint: PublicKey,
+): Promise<Transaction> {
+  const [presaleState] = findPresaleState(mint);
+  const [feeVault] = findFeeVault(mint);
+  // ... accounts for DAMM v2 claim_fee CPI
+  return await program.methods
+    .claimPoolFees()
+    .accounts({ caller, mint, presaleState, feeVault, /* damm v2 accounts */ })
+    .transaction();
+}
+
+// Contributor calls this to pull their accumulated fee share
+export async function buildCollectMyFeesTx(
+  program: any,
+  contributor: PublicKey,
+  mint: PublicKey,
+): Promise<Transaction> {
+  const [presaleState] = findPresaleState(mint);
+  const [feeVault] = findFeeVault(mint);
+  const [contributionState] = findContribution(mint, contributor);
+
+  return await program.methods
+    .collectMyFees()
+    .accounts({ contributor, mint, presaleState, feeVault, contributionState })
+    .transaction();
+}
+
+export function findFeeVault(mint: PublicKey) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("fee_vault"), mint.toBuffer()],
+    PROGRAM_ID
+  );
+}
+```
+
+---
+
+## Updated Fee Economics
+
+With DAMM v2 (vs the original Raydium version):
+
+| Item | Raydium version | Meteora DAMM v2 |
+|---|---|---|
+| Pool creation cost | ~0.5 SOL | ~0.022 SOL |
+| LP burn mechanism | Burn LP tokens | `permanent_lock_position` |
+| LP fee recipient | Burned — nobody | Presale contributors (ongoing) |
+| Fee claim | N/A | Call `claim_pool_fees` + `collect_my_fees` |
+| Fee currency | N/A | SOL (collectFeeMode=1) |
+| Anti-sniper fee | None | 50% → 1% exponential decay over 2h |
+| Dev launch fee charged | 1 SOL | 1 SOL (now ~0.98 SOL profit margin) |
+
+The key pitch to users: **"Provide liquidity, earn forever."** Presale contributors do
+not just get tokens — they get an ongoing share of every trade that happens on the
+token, paid out in SOL. This is a fundamentally more attractive product than Pinksale
+or other launchpads that simply burn LP.
+
+---
+
+## Frontend: Fee Display in BuyWidget
+
+Show the user their estimated fee earnings based on pool volume:
+
+```typescript
+// Fetch pool stats from Meteora API
+const poolStats = await fetch(
+  `https://app.meteora.ag/amm/pool/${poolAddress}`
+).then(r => r.json());
+
+const dailyVolume = poolStats.trade_volume_24h; // USD
+const feeRate = 0.01; // 1% after decay
+const dailyFees = dailyVolume * feeRate;
+
+const contributorShare = contribution / totalRaised; // e.g. 0.02 = 2%
+const estimatedDailyEarnings = dailyFees * contributorShare; // in USD
+
+// Show in UI: "Est. daily fee earnings: $X.XX based on 24h volume"
+```
+
+Also add a "Claim my fee earnings" button to the presale detail page after launch,
+which calls `buildClaimPoolFeesTx` (to pull fees into fee_vault if not already done)
+followed by `buildCollectMyFeesTx`.
+
+---
+
+## Updated launch_presale PresaleState event
+
+```rust
+#[event]
+pub struct PresaleLaunched {
+    pub mint: Pubkey,
+    pub pool: Pubkey,           // DAMM v2 pool address (new)
+    pub position_nft: Pubkey,   // Position NFT mint (new)
+    pub total_raised: u64,
+    pub lp_amount: u64,
+    pub distribution_amount: u64,
+}
+```
+
+---
+
+## Summary of All Changes vs Raydium Version
+
+**Anchor program changes:**
+- `PresaleState`: add `position_nft_mint`, `pool`, `fee_pool_balance`, `fee_pool_per_share_x64`, `total_fees_claimed`
+- `ContributionState`: add `fee_debt_x64`, `fees_collected`
+- `LaunchPresale` accounts: replace Raydium accounts with DAMM v2 accounts
+- New PDA: `fee_vault` `[b"fee_vault", mint]`
+- New instructions: `claim_pool_fees`, `collect_my_fees`
+- Remove: LP token burn logic (replaced by `permanent_lock_position`)
+
+**Frontend/backend changes:**
+- Add `@meteora-ag/cp-amm-sdk` dependency
+- New `lib/meteora.ts` with pool address derivation and fee helpers
+- Update `buildLaunchPresaleTx` with DAMM v2 accounts + position NFT keypair
+- New `buildClaimPoolFeesTx` and `buildCollectMyFeesTx`
+- New `findFeeVault` PDA helper
+- `BuyWidget`: add "Claim fee earnings" button after launch
+- Show estimated fee APR/daily earnings on presale detail page
+- DB: add `poolAddress` and `positionNftMint` columns to `Presale` table
+
+**Program constants to update:**
+```rust
+// Replace RAYDIUM_CPMM with:
+pub const DAMM_V2_PROGRAM: Pubkey = pubkey!("cpamdpZCGKUy5JxQXB4dcpGPiikHawvSWAd6mEn1sGG");
+pub const DAMM_V2_POOL_AUTHORITY: Pubkey = pubkey!("HLnpSz9h2S4hiLQ43rnSD9XkcUThA7B8hQMKmDaiTLcC");
+```

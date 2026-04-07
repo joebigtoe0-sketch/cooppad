@@ -1,0 +1,49 @@
+[package]
+name = "moonpad"
+version = "0.1.0"
+description = "MoonPad presale launchpad"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "moonpad"
+
+[features]
+default = []
+anchor-debug = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+anchor-lang = { version = "0.30.1", features = ["init-if-needed"] }
+anchor-spl = { version = "0.30.1", features = ["token", "associated_token", "metadata"] }
+solana-program = "1.18.26"
+
+# Host-only: enables `proc_macro2::Span::source_file()` for anchor-syn during `anchor build` IDL step.
+# Omit on SBF so the on-chain artifact does not link this crate.
+[target.'cfg(not(target_arch = "sbf"))'.dependencies]
+proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
+# Solana BPF uses Cargo ~1.75; blake3 1.8+ pulls cpufeatures 0.3 (edition2024). Pin for solana-program ^1.5.
+blake3 = { version = "=1.5.5", default-features = false, features = [
+  "digest",
+  "traits-preview",
+] }
+# Solana BPF Cargo 1.75 cannot parse edition2024 manifests. Keep proc-macro-crate on 3.3
+# (toml_edit ^0.22 only). 3.4+ resolves toml_edit 0.23 → toml_parser 1.1.x (broken on BPF cargo).
+proc-macro-crate = "=3.3.0"
+# indexmap 2.12+ requires rustc 1.82; Solana BPF is ~1.75.0-dev.
+indexmap = "=2.11.0"
+# borsh 1.6+ requires rustc 1.77; Solana BPF is ~1.75.0-dev. Match solana-program ^1.2 + schema feature.
+borsh = { version = "=1.5.5", features = ["derive", "unstable__schema"] }
+# unicode-segmentation 1.13+ requires rustc 1.85; Solana BPF is ~1.75.0-dev.
+unicode-segmentation = "=1.12.0"
+# serde 1.0.220+ uses serde_core + include!(OUT_DIR+"/private.rs"), which fails on Windows SBF (error 123).
+serde = { version = "=1.0.219", features = ["derive"] }
+serde_json = "=1.0.132"
+# 0.11.19+ depends on serde_core; keep pre-split serde_bytes for the same Windows fix.
+serde_bytes = "=0.11.15"
