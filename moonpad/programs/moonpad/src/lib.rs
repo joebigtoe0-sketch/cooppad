@@ -15,9 +15,11 @@ pub mod contribute;
 pub mod enable_refund;
 pub mod initialize_presale;
 pub mod launch_presale;
+pub mod register_meteora_pool;
+pub mod sweep_lp_for_meteora;
 pub mod withdraw_contribution;
 
-declare_id!("Aja9DiMcEQuKYmZyb2Rvd9ddcrVqw6scVDasJfii1qzo");
+declare_id!("8XvnK9bVHYXqkbwfaRiEFzxyPbKNEZTY1yJzm5JGrctJ");
 
 #[program]
 pub mod moonpad {
@@ -25,7 +27,7 @@ pub mod moonpad {
 
     pub fn initialize_presale(
         ctx: Context<InitializePresale>,
-        params: InitializePresaleParams,
+        params: Box<InitializePresaleParams>,
     ) -> Result<()> {
         super::initialize_presale::handler(ctx, params)
     }
@@ -43,6 +45,18 @@ pub mod moonpad {
 
     pub fn launch_presale(ctx: Context<LaunchPresale>) -> Result<()> {
         super::launch_presale::handler(ctx)
+    }
+
+    pub fn sweep_lp_for_meteora(ctx: Context<SweepLpForMeteora>) -> Result<()> {
+        super::sweep_lp_for_meteora::handler(ctx)
+    }
+
+    pub fn register_meteora_pool(
+        ctx: Context<RegisterMeteoraPool>,
+        pool: Pubkey,
+        position_nft_mint: Pubkey,
+    ) -> Result<()> {
+        super::register_meteora_pool::handler(ctx, pool, position_nft_mint)
     }
 
     pub fn claim_pool_fees(ctx: Context<ClaimPoolFees>) -> Result<()> {

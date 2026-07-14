@@ -2,6 +2,7 @@
 #[allow(unused_imports)]
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
+use anchor_spl::metadata::{self, Metadata};
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use crate::constants::{DAMM_V2_PROGRAM, PLATFORM_AUTHORITY_PUBKEY};
@@ -14,12 +15,12 @@ pub struct InitializePresaleParams {
     pub token_name: [u8; 32],
     pub token_ticker: [u8; 10],
     pub token_uri: [u8; 200],
-    pub description: [u8; 256],
+    pub description: [u8; 128],
     pub duration_seconds: i64,
     pub max_contribution: u64,
-    pub twitter: [u8; 100],
-    pub telegram: [u8; 100],
-    pub website: [u8; 100],
+    pub twitter: [u8; 48],
+    pub telegram: [u8; 48],
+    pub website: [u8; 80],
 }
 
 #[derive(Accounts)]
@@ -51,37 +52,37 @@ pub struct InitializePresale<'info> {
     )]
     pub mint: Account<'info, Mint>,
 
-    #[account(
-        init,
-        payer = creator,
-        seeds = [b"token_vault", mint.key().as_ref()],
-        bump,
-        token::mint = mint,
-        token::authority = presale_state,
-    )]
-    pub token_vault: Account<'info, TokenAccount>,
+    /// CHECK: PDA `[b"token_vault", mint]` — allocated + `initialize_account3` in handler (keeps `try_accounts` under stack limit).
+    #[account(mut)]
+    pub token_vault: UncheckedAccount<'info>,
 
-    #[account(
-        init,
-        payer = creator,
-        space = 0,
-        seeds = [b"vault", mint.key().as_ref()],
-        bump
-    )]
+    /// CHECK: PDA `[b"vault", mint]` — not `init` here (Anchor stacks 5× `init` and overflows BPF stack).
+    #[account(mut)]
     pub vault: UncheckedAccount<'info>,
 
-    #[account(
-        init,
-        payer = creator,
-        space = 0,
-        seeds = [b"fee_vault", mint.key().as_ref()],
-        bump
-    )]
+    /// CHECK: PDA `[b"fee_vault", mint]` — allocated in `initialize_presale` via `invoke_signed`.
+    #[account(mut)]
     pub fee_vault: UncheckedAccount<'info>,
 
     /// CHECK: per-presale treasury (system account); pubkey is stored in presale_state.
     #[account(mut)]
     pub treasury: UncheckedAccount<'info>,
+
+    /// Metaplex Token Metadata program (`metaqbxx…`).
+    pub token_metadata_program: Program<'info, Metadata>,
+
+    /// Metaplex metadata PDA for `mint` — created via CPI before mint authority is revoked.
+    #[account(
+        mut,
+        seeds = [
+            b"metadata",
+            metadata::mpl_token_metadata::ID.as_ref(),
+            mint.key().as_ref(),
+        ],
+        bump,
+        seeds::program = metadata::mpl_token_metadata::ID
+    )]
+    pub metadata: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
@@ -177,9 +178,15 @@ pub struct LaunchPresale<'info> {
     )]
     pub token_vault: Account<'info, TokenAccount>,
 
-    /// CHECK: Meteora DAMM v2 program
+    /// Per-sale treasury — receives the non-LP share of raised SOL at launch (e.g. 5/85).
+    #[account(mut, constraint = treasury.key() == presale_state.treasury @ PresaleError::InvalidTreasury)]
+    pub treasury: UncheckedAccount<'info>,
+
+    /// CHECK: Meteora DAMM v2 program (CPI pool init — next iteration).
     #[account(constraint = damm_v2_program.key() == DAMM_V2_PROGRAM @ PresaleError::InvalidMeteoraProgram)]
     pub damm_v2_program: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -231,6 +238,7 @@ pub struct ClaimTokens<'info> {
         seeds = [b"presale", mint.key().as_ref()],
         bump = presale_state.state_bump,
         constraint = presale_state.launched @ PresaleError::NotLaunched,
+        constraint = presale_state.pool != Pubkey::default() @ PresaleError::LiquidityPoolNotLive,
     )]
     pub presale_state: Account<'info, PresaleState>,
 
@@ -307,4 +315,70 @@ pub struct ClaimRefund<'info> {
     pub contribution_state: Account<'info, ContributionState>,
 
     pub system_program: Program<'info, System>,
+}
+
+/// COOP-only: move LP SOL + LP project tokens from presale PDAs to the sale treasury for Meteora pool creation.
+#[derive(Accounts)]
+pub struct SweepLpForMeteora<'info> {
+    #[account(
+        mut,
+        constraint = platform_authority.key() == PLATFORM_AUTHORITY_PUBKEY @ PresaleError::InvalidPlatformAuthority
+    )]
+    pub platform_authority: Signer<'info>,
+
+    pub mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        seeds = [b"presale", mint.key().as_ref()],
+        bump = presale_state.state_bump,
+        constraint = presale_state.launched @ PresaleError::NotLaunched,
+        constraint = presale_state.pool == Pubkey::default() @ PresaleError::MeteoraPoolAlreadyRegistered,
+    )]
+    pub presale_state: Account<'info, PresaleState>,
+
+    #[account(mut, seeds = [b"vault", mint.key().as_ref()], bump = presale_state.vault_bump)]
+    pub vault: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"token_vault", mint.key().as_ref()],
+        bump = presale_state.token_vault_bump,
+        token::mint = mint,
+        token::authority = presale_state,
+    )]
+    pub token_vault: Account<'info, TokenAccount>,
+
+    #[account(mut, constraint = treasury.key() == presale_state.treasury @ PresaleError::InvalidTreasury)]
+    pub treasury: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        constraint = treasury_token_account.owner == treasury.key() @ PresaleError::InvalidTreasuryTokenAccount,
+        constraint = treasury_token_account.mint == mint.key() @ PresaleError::InvalidTreasuryTokenAccount,
+    )]
+    pub treasury_token_account: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+/// COOP-only: record DAMM v2 pool keys after successful `initialize_customizable_pool`.
+#[derive(Accounts)]
+pub struct RegisterMeteoraPool<'info> {
+    #[account(
+        constraint = platform_authority.key() == PLATFORM_AUTHORITY_PUBKEY @ PresaleError::InvalidPlatformAuthority
+    )]
+    pub platform_authority: Signer<'info>,
+
+    pub mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        seeds = [b"presale", mint.key().as_ref()],
+        bump = presale_state.state_bump,
+        constraint = presale_state.launched @ PresaleError::NotLaunched,
+        constraint = presale_state.pool == Pubkey::default() @ PresaleError::MeteoraPoolAlreadyRegistered,
+    )]
+    pub presale_state: Account<'info, PresaleState>,
 }

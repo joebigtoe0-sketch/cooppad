@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
-import { DM_Sans, JetBrains_Mono } from "next/font/google";
+import { DM_Sans, JetBrains_Mono, Montserrat } from "next/font/google";
 
-import { AppHeader } from "@/components/AppHeader";
-import { SolanaWalletProvider } from "@/components/WalletProvider";
+import { CoopShell } from "@/components/CoopShell";
+import { CurrencyProvider } from "@/components/curve/CurrencyProvider";
+import { EvmProvider } from "@/components/EvmProvider";
 
 import "./globals.css";
 
@@ -16,9 +17,20 @@ const fontMono = JetBrains_Mono({
   variable: "--font-geist-mono",
 });
 
+const fontDisplay = Montserrat({
+  subsets: ["latin"],
+  weight: ["800"],
+  variable: "--font-coop-display",
+});
+
 export const metadata: Metadata = {
-  title: "MoonPad — Solana presales",
-  description: "Create and join token presales on Solana",
+  title: "The Coop — token launchpad on Robinhood Chain",
+  description:
+    "Launch a token on the bonding curve and graduate it into a Uniswap pool on Robinhood Chain. thecoop.gg",
+  icons: {
+    icon: "/logo.png",
+    apple: "/logo.png",
+  },
 };
 
 export default function RootLayout({
@@ -27,12 +39,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${fontSans.variable} ${fontMono.variable}`}>
-      <body className="min-h-screen font-sans antialiased">
-        <SolanaWalletProvider>
-          <AppHeader />
-          <main className="mx-auto max-w-5xl px-4 py-10">{children}</main>
-        </SolanaWalletProvider>
+    <html
+      lang="en"
+      className={`dark ${fontSans.variable} ${fontMono.variable} ${fontDisplay.variable}`}
+    >
+      <body className="min-h-screen font-sans antialiased text-coop-ink">
+        <EvmProvider>
+          <CurrencyProvider>
+            <CoopShell>{children}</CoopShell>
+          </CurrencyProvider>
+        </EvmProvider>
       </body>
     </html>
   );

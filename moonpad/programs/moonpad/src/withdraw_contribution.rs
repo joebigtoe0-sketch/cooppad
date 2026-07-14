@@ -10,6 +10,10 @@ pub fn handler(ctx: Context<WithdrawContribution>) -> Result<()> {
     let contribution = &mut ctx.accounts.contribution_state;
 
     require!(!state.launched, PresaleError::AlreadyLaunched);
+    require!(
+        state.total_raised < state.raise_target,
+        PresaleError::RaiseTargetMet
+    );
     require!(!state.refund_enabled, PresaleError::PresaleFailed);
     require!(!contribution.refunded, PresaleError::AlreadyRefunded);
     require!(contribution.amount_contributed > 0, PresaleError::NothingToWithdraw);

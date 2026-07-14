@@ -14,11 +14,13 @@ pub fn handler(ctx: Context<Contribute>, amount_lamports: u64) -> Result<()> {
     require!(now < state.end_time, PresaleError::PresaleEnded);
     require!(amount_lamports >= MIN_CONTRIBUTION, PresaleError::AmountTooSmall);
 
-    // 1% platform fee (matches spec)
-    let platform_fee = amount_lamports / 100;
-    let net_amount = amount_lamports
-        .checked_sub(platform_fee)
-        .ok_or(PresaleError::ArithmeticOverflow)?;
+    // `amount_lamports` is the net amount credited to the raise / position; 1% platform fee is charged on top.
+    let net_amount = amount_lamports;
+    let platform_fee = net_amount / 100;
+    require!(
+        net_amount.checked_add(platform_fee).is_some(),
+        PresaleError::ArithmeticOverflow
+    );
 
     if state.max_contribution > 0 {
         let c = &ctx.accounts.contribution_state;
@@ -84,6 +86,9 @@ pub fn handler(ctx: Context<Contribute>, amount_lamports: u64) -> Result<()> {
         .checked_add(net_amount)
         .ok_or(PresaleError::ArithmeticOverflow)?;
     state.total_raised = new_total;
+    if state.goal_reached_at == 0 && new_total >= state.raise_target {
+        state.goal_reached_at = now;
+    }
 
     emit!(ContributionMade {
         mint: ctx.accounts.mint.key(),

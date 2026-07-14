@@ -6,11 +6,11 @@ pub enum PresaleError {
     NameTooLong,
     #[msg("Token ticker exceeds 10 characters")]
     TickerTooLong,
-    #[msg("Description exceeds 256 characters")]
+    #[msg("Description exceeds 128 characters")]
     DescriptionTooLong,
     #[msg("URI exceeds 200 characters")]
     UriTooLong,
-    #[msg("Social link exceeds 100 characters")]
+    #[msg("Social link exceeds 48 characters")]
     SocialTooLong,
     #[msg("Duration must be between 1 hour and 7 days")]
     DurationTooShort,
@@ -60,4 +60,38 @@ pub enum PresaleError {
     InvalidMeteoraProgram,
     #[msg("Invalid UTF-8 in string field")]
     InvalidUtf8,
+    #[msg("Website link exceeds 80 characters")]
+    WebsiteTooLong,
+    #[msg("SOL vault PDA address mismatch")]
+    InvalidVaultPda,
+    #[msg("Fee vault PDA address mismatch")]
+    InvalidFeeVaultPda,
+    #[msg("Vault account must be empty before init")]
+    VaultNotEmpty,
+    #[msg("Token vault PDA address mismatch")]
+    InvalidTokenVaultPda,
+    #[msg("Metaplex metadata PDA or program mismatch")]
+    InvalidMetadataPda,
+    #[msg("Raise target is met — withdrawals are closed")]
+    RaiseTargetMet,
+    #[msg("Raise target has not been reached yet")]
+    RaiseTargetNotReached,
+    #[msg("Launch is not available until the post-fill countdown elapses")]
+    LaunchCountdownActive,
+    #[msg("Goal timestamp missing — presale was created with an older program version")]
+    GoalTimestampMissing,
+    #[msg("Meteora pool already linked — sweep/register can run only once")]
+    MeteoraPoolAlreadyRegistered,
+    #[msg("Token vault does not hold enough for LP sweep — claims may have reduced balance")]
+    LpSweepInsufficientTokens,
+    #[msg("SOL vault does not hold the expected LP lamports for sweep")]
+    InsufficientVaultSolForLpSweep,
+    #[msg("Treasury token account mint or owner mismatch")]
+    InvalidTreasuryTokenAccount,
+    #[msg("Invalid Meteora pool or position NFT pubkey")]
+    InvalidMeteoraPoolPubkey,
+    #[msg("Vault balance cannot pay treasury remainder at launch without dropping below rent")]
+    LaunchVaultInsufficientForRemainder,
+    #[msg("DEX liquidity pool must be registered before contributors can claim tokens")]
+    LiquidityPoolNotLive,
 }

@@ -3,12 +3,110 @@
 @tailwind utilities;
 
 :root {
-  --background: #0a0b12;
-  --foreground: #e8e6f2;
+  --background: #faf6ea;
+  --foreground: #633806;
+  --accent: #e8a020;
+  --muted: #8b5e3c;
 }
 
 body {
   color: var(--foreground);
-  background: var(--background);
+  background: linear-gradient(
+      165deg,
+      #fdf0d5 0%,
+      #f5ecd7 38%,
+      #faf6ea 72%,
+      #f8f0e4 100%
+    )
+    fixed;
+  background-color: var(--background);
   min-height: 100vh;
+}
+
+.dark body {
+  color: #f5ecd7;
+  background: linear-gradient(
+      165deg,
+      #151222 0%,
+      #1e1a2c 45%,
+      #0a0818 100%
+    )
+    fixed;
+  background-color: #0a0818;
+}
+
+/* Header: visible on light cream background */
+header .wallet-adapter-button {
+  color: #633806 !important;
+  background-color: #fdf0d5 !important;
+  border: 1px solid rgba(139, 94, 60, 0.28) !important;
+}
+
+header .wallet-adapter-button-trigger {
+  background-color: #e8a020 !important;
+  color: #633806 !important;
+  border: none !important;
+}
+
+/* Solana wallet adapter — light Coop theme */
+.wallet-adapter-button-trigger {
+  background-color: #e8a020 !important;
+  color: #633806 !important;
+}
+
+.wallet-adapter-button-trigger:not([disabled]):hover {
+  background-color: #d85a30 !important;
+  color: #fdf0d5 !important;
+}
+
+.wallet-adapter-dropdown-list {
+  background: #fffcf5 !important;
+  border: 1px solid rgba(212, 184, 150, 0.45) !important;
+  box-shadow: 0 8px 24px rgba(99, 56, 6, 0.12) !important;
+}
+
+.wallet-adapter-dropdown-list-item {
+  color: #633806 !important;
+}
+
+.wallet-adapter-dropdown-list-item:not([disabled]):hover {
+  background-color: #fdf0d5 !important;
+}
+
+.wallet-adapter-modal-wrapper {
+  background: #fffcf5 !important;
+  box-shadow: 0px 12px 40px rgba(99, 56, 6, 0.15) !important;
+}
+
+.wallet-adapter-modal-title {
+  color: #633806 !important;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button {
+  color: #633806 !important;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button:not([disabled]):hover {
+  background-color: #fdf0d5 !important;
+}
+
+.wallet-adapter-modal-button-close {
+  background: #f5ecd7 !important;
+}
+
+.wallet-adapter-modal-button-close svg {
+  fill: #633806 !important;
+}
+
+.wallet-adapter-modal-middle-button {
+  background-color: #e8a020 !important;
+  color: #633806 !important;
+}
+
+.wallet-adapter-modal-middle-button:hover {
+  background-color: #f0b038 !important;
+}
+
+.wallet-adapter-modal-list-more {
+  color: #633806 !important;
 }

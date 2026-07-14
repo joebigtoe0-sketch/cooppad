@@ -1,0 +1,221 @@
+# The Coop — Brand & Style Guide
+
+**Platform:** thecoop.gg  
+**Token:** $COOP  
+**Version:** 1.0
+
+---
+
+## Brand premise
+
+The Coop is a Solana memetoken presale launchpad where projects are incubated by the community. The narrative is simple and ownable: projects are eggs, contributors are chickens, and the coop is where the action happens. When 85 SOL fills an egg, it hatches — launching a permanently locked Meteora liquidity pool that pays trading fees back to the chickens who incubated it. Forever.
+
+This is not a polished corporate DeFi product. It is a war machine run by degens who believe in the eggs they sit on.
+
+---
+
+## Brand character
+
+The mascot — the lead rooster from the brand art — defines everything. He is:
+
+- Angry. Determined. Charging forward. Not scared of anything.
+- Leading an army of chickens who are equally unhinged.
+- Dust flying. Feathers everywhere. A coop in the background, already left behind.
+
+This is not a cute farm aesthetic. It is **battle chickens meets Pixar energy**. The visual language is cinematic, warm-lit, dramatic — but the subject matter is completely absurd. That tension is the brand.
+
+The tone is: confident degen. Not ironic. Not winking. The chickens genuinely believe they are going to make it.
+
+---
+
+## Visual identity
+
+### Art direction
+
+The brand art establishes the aesthetic ceiling. Every visual asset should feel like it belongs in the same animated feature film — rendered chickens, warm cinematic lighting, dramatic sky, motion blur, feathers mid-air. The reference is Pixar-level production value applied to the most unserious subject possible.
+
+Key visual ingredients from the brand art:
+- Foreground hero chicken: large, muscular, angry, red comb, wide open beak, charging directly at camera
+- Army of chickens behind: same energy, same direction, same rage
+- Lighting: golden hour / sunset, light source directly behind the hero, strong rim light on feathers
+- Sky: deep purple-blue to warm orange gradient, dramatic clouds, feathers floating
+- Ground: green grass, dust kicked up, motion and urgency
+- Background: wooden coop structure visible on the right — the thing they came from, now left behind
+
+Everything that follows the brand art (merch, social posts, marketing materials) should feel like stills from this world.
+
+### Color palette
+
+Extracted from the brand art and matched to the platform UI:
+
+**Primary — Yolk Gold**
+- Used for: CTAs, progress bars, egg shapes, primary accents
+- Hex: `#E8A020`
+- Lighter surface: `#FDF0D5`
+- Dark text on light: `#633806`
+
+**Secondary — Sunset Orange**
+- Used for: warm highlights, secondary accents, gradients in marketing materials
+- Hex: `#D85A30`
+- Lighter: `#FAECE7`
+
+**Sky Purple**
+- Used for: backgrounds in marketing, hero banners, dramatic moments
+- Hex: `#534AB7`
+- Lighter: `#EEEDFE`
+
+**Coop Brown / Straw**
+- Used for: borders, card backgrounds, earthy textures in marketing
+- Hex: `#D4B896` (straw), `#8B5E3C` (feather/wood)
+
+**Grass Green**
+- Used for: success states, "hatched" badges, positive indicators
+- Hex: `#3B6D11`
+- Lighter: `#EAF3DE`
+
+**Off-white / Shell**
+- Used for: card surfaces, egg body color
+- Hex: `#F5ECD7`
+
+### Typography
+
+**Display / Headlines:** Something with presence and warmth — leaning into a bold, slightly rounded sans-serif that reads fast at large sizes. Think Montserrat ExtraBold, Nunito Black, or similar. Headlines should feel like they're yelling.
+
+**Body / UI:** Clean, readable, slightly compact. The UI mockup uses the system sans — that stays. Marketing copy uses the same typeface as headlines at lighter weights.
+
+**Rules:**
+- Headlines: sentence case only. Never all-caps in the UI (aggressive feels wrong; the chickens speak normally).
+- On marketing materials: all-caps is acceptable for short punchy lines only (3 words max).
+- Numbers and SOL amounts: always monospaced or tabular lining figures.
+
+---
+
+## Platform vocabulary
+
+Consistency in language is part of the brand. Every touchpoint should use these terms.
+
+| Generic term | The Coop term |
+|---|---|
+| Presale / launch | Egg |
+| Listing page | Chicken Coop |
+| Create a presale | Lay an egg |
+| Contributor | Chicken |
+| Contributing SOL | Joining / sitting on an egg |
+| Token launches | Hatches |
+| Liquidity locked | Egg is sealed |
+| Live presale | Hatching |
+| Upcoming presale | Incubating |
+| Successful launch | Hatched |
+| Points | Eggs |
+| Claim fees | Collect your yolk |
+| Early withdrawal | Fly the coop |
+
+These terms appear in the UI, in push notifications, in social posts, and in any copy written for the platform.
+
+---
+
+## The egg points system
+
+Points are called **eggs**. They are earned by participating on the platform and will be used for the $COOP token airdrop.
+
+### Earning eggs
+
+| Action | Eggs earned |
+|---|---|
+| Contribute 1 SOL to a presale | 100 eggs |
+| Lay an egg (create a presale) | 500 eggs |
+| Claim LP trading fees | 25 eggs per claim |
+| Refer a chicken who contributes | 200 eggs per referral |
+| Hold a hatched token (weekly snapshot) | 10 eggs per token held |
+
+### Display rules
+
+- Always show eggs with the egg icon (the small oval shape from the platform UI), never just a number alone.
+- Egg count in the nav: "482 eggs" — lowercase, always.
+- In congratulatory moments: "You just earned 100 eggs" — present tense, direct.
+- Never say "points." Always "eggs."
+
+### Airdrop narrative
+
+The framing: **you are not earning points. you are building your flock.** The more eggs you hold, the bigger your claim in the $COOP airdrop. Chickens who hatched the most eggs run the coop.
+
+---
+
+## Social media tone and content
+
+### Voice
+
+The Coop speaks like the lead rooster looks: confident, slightly unhinged, completely serious about being in a chicken war. Not ironic. Not self-aware. The chickens believe.
+
+Good: "The egg is 89% full. The coop does not wait for cowards."  
+Good: "BONK2 just hatched. 312 chickens are now earning trading fees forever. This is what we do."  
+Good: "Lay your egg. Lock the LP. Collect the yolk. Repeat."  
+Bad: "Exciting news! Our new launch is live 🚀"  
+Bad: "GM everyone! Don't forget to check out our newest presale!"
+
+### Content pillars
+
+**1. Hatch announcements**
+When a presale hits 85 SOL and launches. Format: the egg image, the token name, how many chickens participated, how much was raised. Tone: matter-of-fact triumph. The coop expected this.
+
+**2. Progress updates**
+When a live presale crosses milestones (25%, 50%, 75%, 90%). Format: the progress bar graphic, the egg image, time remaining. Tone: urgency without panic. The coop fills.
+
+**3. Egg earnings**
+Weekly or bi-weekly posts showing top egg earners (anonymized with wallet shortcodes). Creates aspiration without doxxing. Tone: the scoreboard exists. Everyone can see it.
+
+**4. Platform narrative posts**
+Longer-form (Twitter threads or medium posts) explaining why LP locking matters, why Meteora fees going back to contributors is different from every other launchpad, why the coop model wins. Tone: conviction. Backed by numbers.
+
+**5. Chicken lore**
+Occasional worldbuilding posts. The chickens have a backstory. They came from the coop. They are charging forward. These don't need to make complete sense — they just need to feel like they're from the same cinematic universe as the brand art.
+
+### Image treatment for social
+
+All social images should derive from the brand art style:
+- Warm-lit, cinematic, rendered chicken characters
+- The lead rooster (or variations of it) as the recurring mascot
+- Gold/amber/orange dominant — never cool-toned or dark as primary palette
+- Text overlays: white or deep amber, large, minimal (3–5 words max)
+- No stock photography. No clipart. No flat icons in marketing materials (the UI uses flat icons; marketing does not).
+
+---
+
+## What the platform is not
+
+To keep the brand consistent, be explicit about what to avoid:
+
+- Not cute. The chickens are not cute. They are angry and determined.
+- Not Moonbirds / NFT-adjacent farm aesthetic. The art direction is animated cinema, not pixel art or PFP project.
+- Not ironic distance. The platform takes itself seriously. The subject matter does not need to.
+- Not corporate DeFi. No "liquidity solutions." No "ecosystem participants." No "tokenomics optimization."
+- Not memecoin-brained. This is a launchpad with real mechanics (Meteora LP, fee distribution, permanent lock). The branding is fun; the product is real.
+
+---
+
+## Token: $COOP
+
+$COOP is the platform's own token, earned through participation (eggs) and distributed via airdrop.
+
+**Positioning:** $COOP is the egg that hatched the coop itself. Holding $COOP means you are part of the coop's structure — not just visiting to buy other eggs.
+
+**Do not over-promise on $COOP utility before it is built.** Communicate: eggs now, airdrop when announced, utility to follow. Chickens are patient when the coop is good.
+
+---
+
+## Brand asset checklist (to produce)
+
+- [ ] Lead rooster mascot — isolated on transparent background (multiple expressions: charging, satisfied, suspicious)
+- [ ] Egg icon — multiple sizes (favicon 16px, nav 20px, display 48px)
+- [ ] Egg progress graphic — static and animated versions for social
+- [ ] Hatch announcement template — for Twitter/X and Telegram
+- [ ] "Incubating / Hatching / Hatched" badge set — for use in platform and social
+- [ ] $COOP coin render — matching the brand art style (gold, cinematic, warm)
+- [ ] Banner/header art for Twitter/X — derived from brand art, wide format
+- [ ] Telegram sticker pack — lead rooster in 8–10 expressions
+
+---
+
+## Summary: the one-line brief
+
+**An army of angry chickens launching memetokens and earning trading fees forever. The coop is open. The eggs are filling.**

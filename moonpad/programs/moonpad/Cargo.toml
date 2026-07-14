@@ -10,6 +10,7 @@ name = "moonpad"
 
 [features]
 default = []
+mainnet = []
 anchor-debug = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []

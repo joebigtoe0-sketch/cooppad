@@ -10,7 +10,7 @@ pub struct PresaleState {
     pub token_ticker: String,
     #[max_len(200)]
     pub token_uri: String,
-    #[max_len(256)]
+    #[max_len(128)]
     pub description: String,
     pub creator: Pubkey,
     /// Per-presale platform treasury (SOL); set once at initialize.
@@ -26,6 +26,8 @@ pub struct PresaleState {
     pub end_time: i64,
     pub launched: bool,
     pub refund_enabled: bool,
+    /// Unix timestamp when `total_raised` first reached `raise_target` (0 = not yet).
+    pub goal_reached_at: i64,
     pub tokens_per_lamport_x64: u128,
     pub position_nft_mint: Pubkey,
     pub pool: Pubkey,
@@ -36,10 +38,10 @@ pub struct PresaleState {
     pub token_vault_bump: u8,
     pub state_bump: u8,
     pub fee_vault_bump: u8,
-    #[max_len(100)]
+    #[max_len(48)]
     pub twitter: String,
-    #[max_len(100)]
+    #[max_len(48)]
     pub telegram: String,
-    #[max_len(100)]
+    #[max_len(80)]
     pub website: String,
 }

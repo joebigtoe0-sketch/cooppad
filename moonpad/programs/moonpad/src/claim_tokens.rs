@@ -9,6 +9,13 @@ pub fn handler(ctx: Context<ClaimTokens>) -> Result<()> {
     let state = &ctx.accounts.presale_state;
     let contribution = &mut ctx.accounts.contribution_state;
 
+    require!(
+        state.pool != Pubkey::default(),
+        PresaleError::LiquidityPoolNotLive
+    );
+
+    require!(!contribution.claimed, PresaleError::AlreadyClaimed);
+
     let tokens_owed = ((contribution.amount_contributed as u128)
         .checked_mul(state.tokens_per_lamport_x64)
         .ok_or(PresaleError::ArithmeticOverflow)?
