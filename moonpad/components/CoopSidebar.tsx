@@ -89,8 +89,15 @@ export function CoopSidebar({
           Community
         </p>
         <div className="mt-2 flex gap-3 text-coop-wood/70 dark:text-coop-shell/60">
-          <span className="text-sm">𝕏</span>
-          <span className="text-sm">✈</span>
+          <a
+            href="https://x.com/thecoopdotfun"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="The Coop on X"
+            className="text-sm transition hover:text-coop-orange"
+          >
+            𝕏
+          </a>
         </div>
         <div className="mt-3 flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-coop-wood/50 dark:text-coop-shell/40">
           <Link href="/docs" onClick={onNavigate} className="hover:text-coop-orange hover:underline">
