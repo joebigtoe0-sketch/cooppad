@@ -4,6 +4,10 @@ export const metadata = {
   title: "Portfolio — The Coop",
 };
 
+// PortfolioClient reads launchpadAddress() during render, which throws when
+// NEXT_PUBLIC_LAUNCHPAD_ADDRESS is unset — don't prerender at build time.
+export const dynamic = "force-dynamic";
+
 export default function PortfolioPage() {
   return (
     <div>
