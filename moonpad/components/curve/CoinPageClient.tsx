@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { CreatorRewards } from "@/components/curve/CreatorRewards";
 import { CurveChart } from "@/components/curve/CurveChart";
 import { CurveHolders } from "@/components/curve/CurveHolders";
 import { CurveTradesFeed } from "@/components/curve/CurveTradesFeed";
@@ -219,6 +220,7 @@ export function CoinPageClient({ address }: { address: string }) {
         </div>
         <div className="space-y-4">
           <CurveTradeWidget token={token} onTraded={() => void load()} />
+          <CreatorRewards token={token} />
           <CurveHolders holders={holders} holderCount={token.holderCount ?? 0} />
         </div>
       </div>
