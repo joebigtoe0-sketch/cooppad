@@ -10,3 +10,6 @@ node_modules
 .keys
 test-ledger
 .yarn
+
+# TypeScript incremental build cache — Railway's builder mounts a cache dir at this path
+*.tsbuildinfo
