@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 import { CurveExplorer } from "@/components/curve/CurveExplorer";
@@ -32,10 +33,17 @@ export default function HomePage() {
           </Link>
         </div>
         <div
-          className="pointer-events-none absolute -bottom-6 right-0 select-none text-[7rem] opacity-[0.12] dark:opacity-[0.08] md:text-[9rem]"
+          className="pointer-events-none absolute -bottom-10 right-4 hidden select-none sm:block md:right-10"
           aria-hidden
         >
-          🐔
+          <Image
+            src="/character.png"
+            alt=""
+            width={200}
+            height={200}
+            priority
+            className="rotate-3 rounded-3xl border border-coop-straw/60 shadow-xl shadow-coop-ink/10 dark:border-coop-700"
+          />
         </div>
       </section>
 
