@@ -33,16 +33,16 @@ export default function HomePage() {
           </Link>
         </div>
         <div
-          className="pointer-events-none absolute -bottom-10 right-4 hidden select-none sm:block md:right-10"
+          className="pointer-events-none absolute bottom-0 right-4 hidden select-none sm:block md:right-12"
           aria-hidden
         >
           <Image
             src="/character.png"
             alt=""
-            width={200}
-            height={200}
+            width={280}
+            height={280}
             priority
-            className="rotate-3 rounded-3xl border border-coop-straw/60 shadow-xl shadow-coop-ink/10 dark:border-coop-700"
+            className="drop-shadow-lg"
           />
         </div>
       </section>
