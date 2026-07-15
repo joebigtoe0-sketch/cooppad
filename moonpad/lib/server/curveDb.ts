@@ -96,7 +96,17 @@ async function createDb(): Promise<CurveDb> {
   const url = process.env.DATABASE_URL?.trim();
   if (url) {
     const { Pool } = await import("pg");
-    const pool = new Pool({ connectionString: url, max: 5 });
+    // Timeouts everywhere: a silently hung query must become a loud error the
+    // logs can show, never an indexer that freezes without a trace.
+    const pool = new Pool({
+      connectionString: url,
+      max: 5,
+      connectionTimeoutMillis: 10_000,
+      idleTimeoutMillis: 30_000,
+      statement_timeout: 30_000,
+      query_timeout: 30_000,
+    });
+    pool.on("error", (err) => console.error("[curve-db] pool error", err.message));
     return {
       async query(text, params) {
         const res = await pool.query(text, params as never[]);

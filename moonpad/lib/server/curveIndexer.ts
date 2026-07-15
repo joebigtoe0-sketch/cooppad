@@ -117,15 +117,37 @@ class CurveIndexerV2 {
     this.launchpad = launchpadAddress();
   }
 
+  private lastHeartbeat = 0;
+
   async run(): Promise<void> {
     for (;;) {
       try {
-        await this.tick();
+        // Watchdog: a tick that hangs (RPC, DB, anything unforeseen) is
+        // abandoned after 2 minutes and retried — all writes are idempotent
+        // (ON CONFLICT DO NOTHING + monotonic last_block), so overlap is safe.
+        await Promise.race([
+          this.tick(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("tick watchdog: 120s timeout")), 120_000)
+          ),
+        ]);
       } catch (err) {
         console.error("[curve-indexer]", err instanceof Error ? err.message : err);
       }
       await new Promise((r) => setTimeout(r, POLL_MS));
     }
+  }
+
+  /** Periodic progress line so hosted logs show the indexer is alive and where. */
+  private async heartbeat(db: CurveDb, latest: bigint): Promise<void> {
+    if (Date.now() - this.lastHeartbeat < 30_000) return;
+    this.lastHeartbeat = Date.now();
+    const last = await getMeta(db, "last_block");
+    console.log(
+      `[curve-indexer] alive: block ${last ?? "-"} / ${latest} (gap ${
+        last ? (latest - BigInt(last)).toString() : "?"
+      }), tokens=${this.tokens.size}, pools=${this.pools.size}`
+    );
   }
 
   private async lockerAddress(): Promise<Address> {
@@ -202,12 +224,35 @@ class CurveIndexerV2 {
     await this.load(db);
 
     const latest = await this.client.getBlockNumber();
+    await this.heartbeat(db, latest);
     const lastRaw = await getMeta(db, "last_block");
+    const start = indexerStartBlock();
     let from: bigint;
     if (lastRaw !== null) {
       from = BigInt(lastRaw) + 1n;
+      // A stored position below this chain's deployment start block is a
+      // leftover from indexing a different chain/launchpad — self-heal by
+      // wiping and starting over rather than grinding through dead history.
+      if (start && from < BigInt(start)) {
+        console.warn(
+          `[curve-indexer] stored block ${lastRaw} predates start ${start} — resetting index`
+        );
+        for (const table of [
+          "curve_trades",
+          "curve_holders",
+          "curve_fee_events",
+          "curve_tokens",
+          "curve_meta",
+        ]) {
+          await db.query(`DELETE FROM ${table}`);
+        }
+        this.tokens.clear();
+        this.pools.clear();
+        this.loaded = false;
+        this.resetChecked = false;
+        return;
+      }
     } else {
-      const start = indexerStartBlock();
       from = start ? BigInt(start) : latest;
     }
     if (from > latest) return;
