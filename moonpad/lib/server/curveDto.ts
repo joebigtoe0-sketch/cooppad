@@ -6,6 +6,8 @@ const GRADUATION_TARGET_ETH = 3.5;
 
 const FLAVORS = ["standard", "lpGrow", "superLp"] as const;
 
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL?.trim() || "https://thecoop.fun";
+
 /** Convert a curve_tokens row (pg or PGlite) into the API DTO. */
 export function tokenRowToJson(row: Record<string, unknown>): CurveTokenJson {
   const price = Number(row.last_price ?? 0) || START_PRICE;
@@ -13,6 +15,9 @@ export function tokenRowToJson(row: Record<string, unknown>): CurveTokenJson {
   const raisedEth = Number(String(row.raised_wei ?? "0")) / 1e18;
   const basePrice = row.base_price != null ? Number(row.base_price) : START_PRICE;
   const change24h = basePrice > 0 && Number(row.trade_count ?? 0) > 0 ? price / basePrice - 1 : 0;
+  // Tokens without a creator-supplied website get their Coop page as the
+  // canonical link — every token always has a home.
+  const website = String(row.website ?? "") || `${SITE_URL}/coin/${String(row.address)}`;
 
   return {
     address: String(row.address),
@@ -23,7 +28,7 @@ export function tokenRowToJson(row: Record<string, unknown>): CurveTokenJson {
     metadataUri: String(row.metadata_uri ?? ""),
     description: String(row.description ?? ""),
     imageUrl: String(row.image_url ?? ""),
-    website: String(row.website ?? ""),
+    website,
     twitter: String(row.twitter ?? ""),
     telegram: String(row.telegram ?? ""),
     phase: graduated ? "graduated" : "trading",
