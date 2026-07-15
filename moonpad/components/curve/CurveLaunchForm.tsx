@@ -54,9 +54,13 @@ export function CurveLaunchForm() {
     }
   }, [devBuy]);
 
-  // Once mined, pull the new token address out of the TokenLaunched log and go there.
+  // Once mined, pull the new token address out of the TokenLaunched log, wait
+  // for the indexer to have it (so the coin page lands fully painted, not on a
+  // flash of "not found"), then navigate.
+  const [indexing, setIndexing] = useState(false);
   useEffect(() => {
     if (!receipt) return;
+    let tokenAddr = "";
     for (const log of receipt.logs) {
       try {
         const decoded = decodeEventLog({
@@ -65,14 +69,40 @@ export function CurveLaunchForm() {
           topics: log.topics,
         });
         if (decoded.eventName === "TokenLaunched") {
-          const tokenAddr = (decoded.args as { token: string }).token;
-          router.push(`/coin/${tokenAddr.toLowerCase()}`);
-          return;
+          tokenAddr = (decoded.args as { token: string }).token.toLowerCase();
+          break;
         }
       } catch {
         /* not our event */
       }
     }
+    if (!tokenAddr) return;
+
+    let stop = false;
+    setIndexing(true);
+    const started = Date.now();
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/curve/tokens/${tokenAddr}`, { cache: "no-store" });
+        if (res.ok) {
+          if (!stop) router.push(`/coin/${tokenAddr}`);
+          return;
+        }
+      } catch {
+        /* keep polling */
+      }
+      // Give the indexer up to 25s; navigate anyway after that — the coin
+      // page has its own hatching state for late indexing.
+      if (!stop && Date.now() - started < 25_000) {
+        setTimeout(() => void poll(), 1_500);
+      } else if (!stop) {
+        router.push(`/coin/${tokenAddr}`);
+      }
+    };
+    void poll();
+    return () => {
+      stop = true;
+    };
   }, [receipt, router]);
 
   const onPickImage = (file: File | null) => {
@@ -153,7 +183,7 @@ export function CurveLaunchForm() {
     }
   };
 
-  const busy = step !== "" || isPending || confirming;
+  const busy = step !== "" || isPending || confirming || indexing;
   const label = !isConnected
     ? "Connect wallet"
     : wrongChain
@@ -166,7 +196,9 @@ export function CurveLaunchForm() {
             ? "Confirm in wallet…"
             : confirming
               ? "Launching…"
-              : "Launch token 🚀";
+              : indexing
+                ? "Hatching your token page…"
+                : "Launch token 🚀";
 
   const inputCls =
     "w-full rounded-xl border border-coop-straw/50 bg-coop-canvas px-3 py-2.5 text-sm text-coop-ink outline-none transition focus:border-coop-yolk dark:border-coop-700 dark:bg-coop-950 dark:text-coop-shell";

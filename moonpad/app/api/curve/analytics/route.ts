@@ -85,8 +85,9 @@ export async function GET(req: Request) {
         image_url: string;
         volume_wei: string;
         trade_count: string;
+        flavor: number;
       }>(
-        `SELECT address, name, symbol, image_url, volume_wei, trade_count
+        `SELECT address, name, symbol, image_url, volume_wei, trade_count, flavor
          FROM curve_tokens ORDER BY volume_wei DESC LIMIT 10`
       ),
     ]);
@@ -122,6 +123,7 @@ export async function GET(req: Request) {
         imageUrl: r.image_url ?? "",
         volumeEth: Number(r.volume_wei) / 1e18,
         tradeCount: Number(r.trade_count),
+        flavor: (["standard", "lpGrow", "superLp"] as const)[Number(r.flavor)] ?? "standard",
       })),
       updatedAt: new Date().toISOString(),
     };

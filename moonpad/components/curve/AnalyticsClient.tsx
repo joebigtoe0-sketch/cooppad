@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { useCurrency } from "@/components/curve/CurrencyProvider";
+import { FlavorBadge } from "@/components/curve/FlavorBadge";
 import { ipfsToHttp } from "@/lib/evm/ipfs";
 import type { AnalyticsJson } from "@/types/curve";
 
@@ -227,8 +228,11 @@ export function AnalyticsClient() {
                       </span>
                     )}
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-bold text-coop-ink dark:text-coop-shell">
-                        {t.name}
+                      <span className="flex items-center gap-1.5">
+                        <span className="block truncate text-sm font-bold text-coop-ink dark:text-coop-shell">
+                          {t.name}
+                        </span>
+                        <FlavorBadge flavor={t.flavor} />
                       </span>
                       <span className="block font-mono text-[10px] text-coop-wood/60 dark:text-coop-shell/50">
                         {t.symbol} · {t.tradeCount.toLocaleString("en-US")} trades

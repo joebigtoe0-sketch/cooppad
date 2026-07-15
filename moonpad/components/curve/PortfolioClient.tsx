@@ -12,6 +12,7 @@ import {
 } from "wagmi";
 
 import { useCurrency } from "@/components/curve/CurrencyProvider";
+import { FlavorBadge } from "@/components/curve/FlavorBadge";
 import { coopLaunchpadV2Abi } from "@/lib/evm/abi/coopLaunchpadV2";
 import { coopLockerV2Abi } from "@/lib/evm/abi/coopLockerV2";
 import { launchpadAddress } from "@/lib/evm/chains";
@@ -36,11 +37,14 @@ function TokenBadge({ token }: { token: CurveTokenJson }) {
         </span>
       )}
       <span className="min-w-0">
-        <span className="block truncate text-sm font-bold text-coop-ink hover:text-coop-orange dark:text-coop-shell">
-          {token.name}
+        <span className="flex items-center gap-1.5">
+          <span className="block truncate text-sm font-bold text-coop-ink hover:text-coop-orange dark:text-coop-shell">
+            {token.name}
+          </span>
+          <FlavorBadge flavor={token.flavor} />
         </span>
         <span className="block font-mono text-[10px] text-coop-wood/60 dark:text-coop-shell/50">
-          {token.symbol} · {token.phase === "graduated" ? "graduated" : `curve ${Math.round(token.progress * 100)}%`}
+          {token.symbol} · {token.phase === "graduated" ? "graduated" : `climbing ${Math.round(token.progress * 100)}%`}
         </span>
       </span>
     </Link>

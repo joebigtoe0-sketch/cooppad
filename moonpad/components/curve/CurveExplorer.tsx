@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { CurveTokenCard } from "@/components/curve/CurveTokenCard";
+import { FlavorBadge } from "@/components/curve/FlavorBadge";
 import { ipfsToHttp } from "@/lib/evm/ipfs";
 import type { CurveTokenJson } from "@/types/curve";
 
@@ -90,6 +91,7 @@ export function CurveExplorer() {
                 {koth.symbol}
               </span>
             </p>
+            <FlavorBadge flavor={koth.flavor} className="mt-1" />
           </div>
           <div className="ml-auto text-right">
             <p className="font-mono text-sm font-bold text-coop-ink dark:text-coop-yolk">

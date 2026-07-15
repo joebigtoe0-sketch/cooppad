@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { CreatorRewards } from "@/components/curve/CreatorRewards";
 import { CurveChart } from "@/components/curve/CurveChart";
+import { FlavorBadge } from "@/components/curve/FlavorBadge";
 import { CurveHolders } from "@/components/curve/CurveHolders";
 import { CurveTradesFeed } from "@/components/curve/CurveTradesFeed";
 import { CurveTradeWidget } from "@/components/curve/CurveTradeWidget";
@@ -21,8 +22,16 @@ export function CoinPageClient({ address }: { address: string }) {
   const [token, setToken] = useState<CurveTokenJson | null>(null);
   const [holders, setHolders] = useState<CurveHolderJson[]>([]);
   const [notFound, setNotFound] = useState(false);
+  // Fresh launches take a few seconds to hit the indexer — show a hatching
+  // screen instead of "not found" while within the grace window.
+  const [graceOver, setGraceOver] = useState(false);
   const { fmt } = useCurrency();
   const explorer = activeChain().blockExplorers?.default.url ?? "";
+
+  useEffect(() => {
+    const id = setTimeout(() => setGraceOver(true), 60_000);
+    return () => clearTimeout(id);
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -50,6 +59,23 @@ export function CoinPageClient({ address }: { address: string }) {
     const id = setInterval(() => void load(), 6_000);
     return () => clearInterval(id);
   }, [load]);
+
+  if (notFound && !graceOver) {
+    return (
+      <div className="rounded-2xl border border-dashed border-coop-straw/50 bg-coop-surface-warm/30 px-6 py-16 text-center dark:border-coop-700 dark:bg-coop-800/30">
+        <p className="animate-bounce text-4xl" aria-hidden>
+          🥚
+        </p>
+        <p className="mt-3 font-display text-lg font-extrabold text-coop-ink dark:text-coop-shell">
+          Hatching…
+        </p>
+        <p className="mt-1 text-sm text-coop-wood/70 dark:text-coop-shell/60">
+          The token is on-chain — the indexer is catching up. This page will load
+          itself in a few seconds.
+        </p>
+      </div>
+    );
+  }
 
   if (notFound) {
     return (
@@ -108,11 +134,7 @@ export function CoinPageClient({ address }: { address: string }) {
             <span className="rounded bg-coop-surface-warm px-2 py-0.5 font-mono text-xs font-bold text-coop-wood dark:bg-coop-800 dark:text-coop-shell/80">
               {token.symbol}
             </span>
-            {token.flavor === "lpGrow" ? (
-              <span className="rounded-full bg-coop-sky/10 px-2 py-0.5 text-[10px] font-bold text-coop-sky dark:bg-coop-sky/20">
-                🌱 LP-Growing
-              </span>
-            ) : null}
+            <FlavorBadge flavor={token.flavor} />
           </div>
           <p className="mt-1 text-xs text-coop-wood/70 dark:text-coop-shell/55">
             created by{" "}

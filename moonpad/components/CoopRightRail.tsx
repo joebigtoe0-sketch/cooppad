@@ -25,7 +25,7 @@ export function CoopRightRail() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/curve/trades?limit=14", { cache: "no-store" });
+      const res = await fetch("/api/curve/trades?limit=12", { cache: "no-store" });
       const data = (await res.json()) as { trades?: CurveTradeJson[]; stats?: Stats };
       setTrades(data.trades ?? []);
       if (data.stats) setStats(data.stats);

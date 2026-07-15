@@ -84,6 +84,7 @@ export type AnalyticsJson = {
     imageUrl: string;
     volumeEth: number;
     tradeCount: number;
+    flavor: CurveTokenJson["flavor"];
   }[];
   updatedAt: string;
 };
