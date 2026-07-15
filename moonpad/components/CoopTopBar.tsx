@@ -4,6 +4,7 @@ import { ConnectButton } from "@rainbow-me/rainbowkit";
 import Image from "next/image";
 import Link from "next/link";
 
+import { CoinSearch } from "@/components/curve/CoinSearch";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 export function CoopTopBar({ onMenu }: { onMenu: () => void }) {
@@ -40,6 +41,10 @@ export function CoopTopBar({ onMenu }: { onMenu: () => void }) {
           The <span className="text-coop-yolk">Coop</span>
         </span>
       </Link>
+
+      <div className="flex flex-1 justify-center px-2">
+        <CoinSearch />
+      </div>
 
       <div className="ml-auto flex items-center gap-2">
         <ThemeToggle />
