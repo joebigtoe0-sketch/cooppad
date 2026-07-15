@@ -18,6 +18,43 @@ function short(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
+/** Contract address that copies itself to the clipboard on click. */
+function CopyAddress({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      title="Copy contract address"
+      onClick={() => {
+        void navigator.clipboard.writeText(address).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+      className="inline-flex items-center gap-1 font-mono transition hover:text-coop-orange"
+    >
+      {short(address)}
+      {copied ? (
+        <span className="font-sans text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+          copied!
+        </span>
+      ) : (
+        <svg
+          className="h-3 w-3 opacity-60"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          aria-hidden
+        >
+          <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+          <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 export function CoinPageClient({ address }: { address: string }) {
   const [token, setToken] = useState<CurveTokenJson | null>(null);
   const [holders, setHolders] = useState<CurveHolderJson[]>([]);
@@ -146,15 +183,32 @@ export function CoinPageClient({ address }: { address: string }) {
             >
               {short(token.creator)}
             </a>{" "}
-            ·{" "}
-            <a
-              href={explorer ? `${explorer}/token/${token.address}` : "#"}
-              target="_blank"
-              rel="noreferrer"
-              className="font-mono hover:text-coop-orange hover:underline"
-            >
-              {short(token.address)}
-            </a>
+            · <CopyAddress address={token.address} />
+            {explorer ? (
+              <>
+                {" "}
+                <a
+                  href={`${explorer}/token/${token.address}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label="View contract on explorer"
+                  title="View on explorer"
+                  className="inline-block align-middle hover:text-coop-orange"
+                >
+                  <svg
+                    className="h-3 w-3 opacity-60"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    aria-hidden
+                  >
+                    <path d="M6.5 3.5H3.5A1.5 1.5 0 0 0 2 5v7.5A1.5 1.5 0 0 0 3.5 14H11a1.5 1.5 0 0 0 1.5-1.5V9.5M9.5 2H14v4.5M14 2 7.5 8.5" />
+                  </svg>
+                </a>
+              </>
+            ) : null}
           </p>
           {token.description ? (
             <p className="mt-1 max-w-xl text-xs leading-snug text-coop-wood/75 dark:text-coop-shell/60">
