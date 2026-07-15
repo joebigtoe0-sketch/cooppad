@@ -298,7 +298,7 @@ export function CurveLaunchForm() {
                 },
                 {
                   id: 2 as Flavor,
-                  title: "🔒 Super LP",
+                  title: "⚡ Super LP",
                   text: "5% buy tax — 100% auto-compounds into liquidity locked forever",
                 },
               ] as const
@@ -411,7 +411,7 @@ export function CurveLaunchForm() {
             </span>
           ) : flavor === 2 ? (
             <span className="mt-2 inline-flex w-fit items-center gap-1 rounded-full bg-coop-orange/10 px-2 py-0.5 text-[10px] font-bold text-coop-orange dark:bg-coop-orange/20">
-              🔒 Super LP
+              ⚡ Super LP
             </span>
           ) : null}
         </div>

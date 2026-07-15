@@ -17,7 +17,7 @@ const STYLES: Record<
     cls: "bg-coop-sky/10 text-coop-sky dark:bg-coop-sky/20",
   },
   superLp: {
-    icon: "🔒",
+    icon: "⚡",
     short: "Super LP",
     detail: "Super LP — 5% buy tax compounds into locked liquidity",
     cls: "bg-coop-orange/10 text-coop-orange dark:bg-coop-orange/20",

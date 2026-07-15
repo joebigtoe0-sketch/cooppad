@@ -80,7 +80,7 @@ export default function DocsPage() {
           between creator and platform.
         </p>
         <p>
-          <strong>🔒 Super LP</strong> — carries a permanent{" "}
+          <strong>⚡ Super LP</strong> — carries a permanent{" "}
           <strong>5% tax on buys</strong> (sells are never taxed). The tax
           auto-compounds: it accumulates on the locker, and each collection
           sells half for ETH, pairs it with the other half, and mints the
