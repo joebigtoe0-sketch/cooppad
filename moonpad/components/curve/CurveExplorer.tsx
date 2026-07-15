@@ -10,9 +10,11 @@ import type { CurveTokenJson } from "@/types/curve";
 type Status = "all" | "live" | "graduated";
 type Sort = "activity" | "new" | "gainers" | "marketcap" | "volume";
 
+// "live" is the API's name for not-yet-graduated (phase=trading) — shown to
+// users as "Climbing" since every V2 token trades forever either way.
 const STATUS_TABS: { key: Status; label: string }[] = [
   { key: "all", label: "All" },
-  { key: "live", label: "Live" },
+  { key: "live", label: "Climbing" },
   { key: "graduated", label: "Graduated" },
 ];
 

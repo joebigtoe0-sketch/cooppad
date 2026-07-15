@@ -98,6 +98,10 @@ export function CurveTokenCard({ token }: { token: CurveTokenJson }) {
         <span className="mt-2 inline-flex w-fit items-center gap-1 rounded-full bg-coop-sky/10 px-2 py-0.5 text-[10px] font-bold text-coop-sky dark:bg-coop-sky/20">
           🌱 LP-Growing — pool fees deepen locked liquidity
         </span>
+      ) : token.flavor === "superLp" ? (
+        <span className="mt-2 inline-flex w-fit items-center gap-1 rounded-full bg-coop-orange/10 px-2 py-0.5 text-[10px] font-bold text-coop-orange dark:bg-coop-orange/20">
+          🔒 Super LP — 5% buy tax compounds into locked liquidity
+        </span>
       ) : null}
     </Link>
   );
