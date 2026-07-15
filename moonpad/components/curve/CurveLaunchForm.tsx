@@ -198,7 +198,7 @@ export function CurveLaunchForm() {
               ? "Launching…"
               : indexing
                 ? "Hatching your token page…"
-                : "Launch token 🚀";
+                : "Launch token";
 
   const inputCls =
     "w-full rounded-xl border border-coop-straw/50 bg-coop-canvas px-3 py-2.5 text-sm text-coop-ink outline-none transition focus:border-coop-yolk dark:border-coop-700 dark:bg-coop-950 dark:text-coop-shell";
@@ -289,17 +289,17 @@ export function CurveLaunchForm() {
                 {
                   id: 0 as Flavor,
                   title: "Standard",
-                  text: "0% fees — no token tax, ever",
+                  text: "0% token tax. You earn 0.5% of every trade from Uniswap LP rewards.",
                 },
                 {
                   id: 1 as Flavor,
                   title: "🌱 LP-Growing",
-                  text: "0% fees — Uniswap pool fees auto-deepen the locked liquidity",
+                  text: "0% token tax. You earn 0.15% of every trade — 70% of LP rewards auto-deepen the locked liquidity.",
                 },
                 {
                   id: 2 as Flavor,
                   title: "⚡ Super LP",
-                  text: "5% buy tax — 100% auto-compounds into liquidity locked forever",
+                  text: "5% buy tax auto-deepens the locked liquidity. You earn 0.5% of every trade from Uniswap LP rewards.",
                 },
               ] as const
             ).map((card) => (

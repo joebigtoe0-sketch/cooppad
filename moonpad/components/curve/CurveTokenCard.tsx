@@ -95,7 +95,7 @@ export function CurveTokenCard({ token }: { token: CurveTokenJson }) {
         )}
       </div>
 
-      <FlavorBadge flavor={token.flavor} detail className="mt-2" />
+      <FlavorBadge flavor={token.flavor} className="mt-2" />
     </Link>
   );
 }
