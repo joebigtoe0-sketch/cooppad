@@ -23,6 +23,10 @@ const SLIPPAGE_PRESETS = [0.5, 1, 2, 5];
 const ETH_PRESETS = ["0.05", "0.1", "0.5", "1"];
 const USD_PRESETS = ["10", "50", "100", "250"];
 const POOL_FEE = 10_000; // 1% Uniswap v3 tier
+// Mirror of the token contract's launch protections (SNIPE_WINDOW /
+// SNIPE_MAX_TOKENS): first 120s, max 2% of supply per wallet, buys only.
+const SNIPE_WINDOW_MS = 120_000;
+const SNIPE_CAP_WEI = 20_000_000n * 10n ** 18n; // 2% of 1B supply
 
 export function CurveTradeWidget({
   token,
@@ -64,6 +68,17 @@ export function CurveTradeWidget({
   const superLp = token.flavor === "superLp";
   const wrongChain = isConnected && chainId !== chain.id;
   const usdMode = inputCur === "USD" && ethUsd > 0;
+
+  // Live countdown of the on-chain sniper-protection window.
+  const launchAt = new Date(token.createdAt).getTime();
+  const [now, setNow] = useState(() => Date.now());
+  const snipeWindowActive = now - launchAt < SNIPE_WINDOW_MS;
+  useEffect(() => {
+    if (!snipeWindowActive) return;
+    const id = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, [snipeWindowActive]);
+  const snipeSecondsLeft = Math.max(0, Math.ceil((launchAt + SNIPE_WINDOW_MS - now) / 1_000));
 
   const applySlippage = (v: bigint): bigint => {
     const bps = BigInt(Math.round(slippagePct * 100));
@@ -182,6 +197,14 @@ export function CurveTradeWidget({
   const needsApproval =
     tab === "sell" && sellTokens > 0n && (allowance ?? 0n) < sellTokens;
 
+  // Would this buy blow past the 2%-per-wallet launch-window cap? Balance is
+  // a close proxy for the contract's cumulative window counter.
+  const overSnipeCap =
+    snipeWindowActive &&
+    tab === "buy" &&
+    buyEstimate > 0n &&
+    buyEstimate + (balance ?? 0n) > SNIPE_CAP_WEI;
+
   const busy = isPending || confirming;
 
   const submit = () => {
@@ -226,11 +249,13 @@ export function CurveTradeWidget({
       ? `Switch to ${chain.name}`
       : busy
         ? "Confirming…"
-        : tab === "buy"
-          ? "Buy"
-          : needsApproval
-            ? "Approve"
-            : "Sell";
+        : overSnipeCap
+          ? "Over the 2% launch cap"
+          : tab === "buy"
+            ? "Buy"
+            : needsApproval
+              ? "Approve"
+              : "Sell";
 
   const presets = usdMode ? USD_PRESETS : ETH_PRESETS;
 
@@ -239,6 +264,13 @@ export function CurveTradeWidget({
       {token.phase === "graduated" ? (
         <div className="mb-3 flex items-center gap-2 rounded-xl bg-emerald-500/10 px-3 py-2 text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
           🎓 Graduated — 3.5+ ETH in the locked pool. Trading never stops.
+        </div>
+      ) : null}
+      {snipeWindowActive ? (
+        <div className="mb-3 rounded-xl bg-amber-500/10 px-3 py-2 text-[11px] font-bold leading-snug text-amber-700 dark:text-amber-400">
+          🛡️ Sniper protection: {snipeSecondsLeft}s left — max 2% of supply
+          (20M tokens) per wallet during the launch window. Sells are never
+          restricted.
         </div>
       ) : null}
       <div className="flex rounded-xl border border-coop-straw/40 p-1 dark:border-coop-700">
@@ -487,7 +519,7 @@ export function CurveTradeWidget({
       <button
         type="button"
         onClick={submit}
-        disabled={busy}
+        disabled={busy || overSnipeCap}
         className={`mt-4 w-full rounded-xl px-4 py-3 text-sm font-extrabold text-white shadow-md transition disabled:opacity-50 ${
           tab === "buy"
             ? "bg-emerald-600 hover:bg-emerald-500"
@@ -496,6 +528,13 @@ export function CurveTradeWidget({
       >
         {label}
       </button>
+      {overSnipeCap ? (
+        <p className="mt-2 text-[11px] leading-snug text-amber-700 dark:text-amber-400">
+          This buy would put your wallet over the launch-window cap of 2% of
+          supply. Try a smaller amount, or wait {snipeSecondsLeft}s for the
+          window to end.
+        </p>
+      ) : null}
 
       {writeError ? (
         <p className="mt-2 break-words text-[11px] leading-snug text-red-500">
