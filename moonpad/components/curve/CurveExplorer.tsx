@@ -83,7 +83,7 @@ export function CurveExplorer() {
           )}
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-wider text-coop-orange">
-              King of the hill
+              King of the coop
             </p>
             <p className="truncate font-display text-base font-extrabold text-coop-ink dark:text-coop-shell">
               {koth.name}{" "}
