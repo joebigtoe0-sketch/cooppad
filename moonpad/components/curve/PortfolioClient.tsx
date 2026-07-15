@@ -177,6 +177,7 @@ export function PortfolioClient() {
               <thead>
                 <tr className="border-b border-coop-straw/30 text-[10px] uppercase tracking-wider text-coop-wood/50 dark:border-coop-800 dark:text-coop-shell/40">
                   <th className="px-4 py-2.5 font-semibold">Token</th>
+                  <th className="px-4 py-2.5 text-right font-semibold">Mcap</th>
                   <th className="px-4 py-2.5 text-right font-semibold">Balance</th>
                   <th className="px-4 py-2.5 text-right font-semibold">Value</th>
                 </tr>
@@ -189,6 +190,9 @@ export function PortfolioClient() {
                   >
                     <td className="px-4 py-2.5">
                       <TokenBadge token={h.token} />
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono text-xs">
+                      {fmt(h.token.marketCapEth)}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-xs">
                       {(Number(h.balance) / 1e18).toLocaleString("en-US", {
