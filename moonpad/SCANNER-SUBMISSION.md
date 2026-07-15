@@ -76,15 +76,26 @@ function _update(address from, address to, uint256 value) internal override {
 }
 ```
 
-**Why the honeypot simulator fails:** Robinhood Chain does not have the
-canonical Uniswap periphery `SwapRouter` deployed. Simulators that route a test
-sell through the standard periphery address revert (no contract there) and
-report "cannot sell." Real sells succeed via direct v3-core swaps — which is
-exactly what our `CoopRouter.sellExactTokens` does. Please simulate sells
-against our router (or a direct `pool.swap`) rather than canonical periphery.
+**Why the honeypot simulator likely fails:** the canonical Uniswap periphery
+`SwapRouter` is not deployed at its standard address on Robinhood Chain, so a
+simulator that hardcodes that address for its test sell reverts (no contract
+there) and reports "cannot sell." Selling actually works via direct v3-core
+swaps and via the third-party routers that are deployed here. Please route the
+sell simulation through a deployed router (e.g. our
+`CoopRouter.sellExactTokens` at `0x7490D61…21e5a`) or a direct `pool.swap`.
 
-*Verifiable:* there are real, successful on-chain **sell** transactions for
-these tokens. Example sell tx hashes: `<<attach 2–3 sell tx hashes here>>`.
+*Verifiable — three successful real sells of the flagged token:* these are
+sells of the **Super LP COOP token** `0xef2e5d2c38085d014d1fc7eee19c50c9ea58fc00`
+(the taxed flavor GMGN flags as "100% sell tax"), out of its pool
+`0x8d35F1806d2141f1fe99B0d736ea868c014B9657`. All succeeded (status 1), and
+notably each routed through an **independent third-party router**, not our own
+— so sellability does not depend on Coop infrastructure:
+
+| Sell tx | Router used |
+|---------|-------------|
+| `0x79abb691a341d6b28d0e0269aa1d1127ab2f62cfe002b592ab6161cb8645c24f` | `0x243A17063102c29fB60AA930db199d4b73AB8A37` |
+| `0x2b4fb3ad62a891f4edcff857f3e7ea42596772c4cadb0d685e4afa26e4521b8b` | `0x5A705DE8982235a7fa45bB83dCaCf03a211389C7` |
+| `0x752e7b1186606e5837e5f1c80b93a0b9487a525e866099a1fc4b68ba0d6e2839` | `0x243A17063102c29fB60AA930db199d4b73AB8A37` |
 
 ### 2. "Other — launchpad can reassign a privileged address that bypasses transfer restrictions and fee logic (hidden backdoor)" (HIGH) — MISCHARACTERIZED
 
