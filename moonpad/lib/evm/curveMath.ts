@@ -47,3 +47,37 @@ export function formatTokenAmount(raw: bigint | string): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(2)}k`;
   return n.toFixed(2);
 }
+
+// --- V2 instant-pool dev-buy quote (mirrors CoopLaunchpadV2 launch math) ---
+const V2_INITIAL_TICK = -205_800;
+const V2_MAX_TICK = 887_200;
+const V2_SUPPLY = 1e9; // whole tokens
+const POOL_FEE = 0.01; // 1% Uniswap tier
+
+function sqrtRatioAtTick(tick: number): number {
+  return Math.pow(1.0001, tick / 2);
+}
+
+/**
+ * Estimate how many tokens a dev buy of `ethIn` receives at launch. The launch
+ * mints the entire supply single-sided into a Uniswap v3 range, so the dev buy
+ * is a swap that walks price up that range. Dev buys are exempt from the Super
+ * LP 5% tax, so the same estimate applies to every flavor. Display only —
+ * actual output is whatever the swap returns on-chain.
+ */
+export function quoteDevBuyTokens(ethIn: number): number {
+  if (!(ethIn > 0)) return 0;
+  const sqrtLower = sqrtRatioAtTick(V2_INITIAL_TICK);
+  const sqrtUpper = sqrtRatioAtTick(V2_MAX_TICK);
+  // Price starts at the bottom of the range; the position is all token there.
+  const L = (V2_SUPPLY * (sqrtLower * sqrtUpper)) / (sqrtUpper - sqrtLower);
+  const dy = ethIn * (1 - POOL_FEE); // WETH in, after the pool fee
+  const sqrtNew = sqrtLower + dy / L;
+  const tokensOut = L * (1 / sqrtLower - 1 / sqrtNew);
+  return Math.max(0, Math.min(tokensOut, V2_SUPPLY));
+}
+
+/** Dev-buy tokens as a percentage of total supply (for a “X% of supply” hint). */
+export function devBuySupplyPct(ethIn: number): number {
+  return (quoteDevBuyTokens(ethIn) / V2_SUPPLY) * 100;
+}

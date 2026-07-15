@@ -14,6 +14,7 @@ import {
 
 import { coopLaunchpadV2Abi } from "@/lib/evm/abi/coopLaunchpadV2";
 import { activeChain, launchpadAddress } from "@/lib/evm/chains";
+import { devBuySupplyPct, quoteDevBuyTokens } from "@/lib/evm/curveMath";
 
 type Flavor = 0 | 1 | 2; // 0 = Standard, 1 = LPGrow, 2 = SuperLP (contract enum)
 const FLAVOR_KEYS = ["standard", "lpGrow", "superLp"] as const;
@@ -53,6 +54,9 @@ export function CurveLaunchForm() {
       return 0n;
     }
   }, [devBuy]);
+  const devBuyEthNum = Number(devBuy) || 0;
+  const devBuyTokens = useMemo(() => quoteDevBuyTokens(devBuyEthNum), [devBuyEthNum]);
+  const devBuyPct = useMemo(() => devBuySupplyPct(devBuyEthNum), [devBuyEthNum]);
 
   // Once mined, pull the new token address out of the TokenLaunched log, wait
   // for the indexer to have it (so the coin page lands fully painted, not on a
@@ -339,6 +343,29 @@ export function CurveLaunchForm() {
               can.
             </span>
           </div>
+          {devBuyTokens > 0 ? (
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-coop-surface-warm/50 px-3 py-2 text-xs dark:bg-coop-800/50">
+              <span className="text-coop-wood/70 dark:text-coop-shell/60">
+                You receive ≈
+              </span>
+              <span className="font-mono font-bold text-coop-ink dark:text-coop-shell">
+                {devBuyTokens >= 1_000_000
+                  ? `${(devBuyTokens / 1_000_000).toFixed(2)}M`
+                  : devBuyTokens >= 1_000
+                    ? `${(devBuyTokens / 1_000).toFixed(1)}K`
+                    : devBuyTokens.toFixed(0)}{" "}
+                {symbol ? symbol.toUpperCase() : "tokens"}
+              </span>
+              <span className="rounded-full bg-coop-yolk/20 px-2 py-0.5 font-mono text-[10px] font-bold text-coop-wood dark:text-coop-yolk-soft">
+                {devBuyPct.toFixed(2)}% of supply
+              </span>
+              {devBuyPct > 25 ? (
+                <span className="text-[11px] text-coop-orange">
+                  Heads up — a large dev buy can scare off other buyers.
+                </span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         {error || writeError ? (
