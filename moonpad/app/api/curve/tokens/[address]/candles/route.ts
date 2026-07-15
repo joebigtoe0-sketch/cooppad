@@ -6,7 +6,7 @@ import type { CurveCandleJson } from "@/types/curve";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const ALLOWED_RES = new Set([60, 300, 900, 3600, 14400, 86400]);
+const ALLOWED_RES = new Set([1, 15, 30, 60, 300, 900, 3600, 14400, 86400]);
 
 export async function GET(
   req: Request,

@@ -16,6 +16,9 @@ import { useCurrency } from "@/components/curve/CurrencyProvider";
 import type { CurveCandleJson } from "@/types/curve";
 
 const RESOLUTIONS = [
+  { key: 1, label: "1s" },
+  { key: 15, label: "15s" },
+  { key: 30, label: "30s" },
   { key: 60, label: "1m" },
   { key: 300, label: "5m" },
   { key: 900, label: "15m" },
@@ -23,6 +26,27 @@ const RESOLUTIONS = [
   { key: 14400, label: "4h" },
   { key: 86400, label: "1d" },
 ];
+
+const SUBSCRIPTS = "₀₁₂₃₄₅₆₇₈₉";
+
+/** Axis/legend price formatter that survives 1e-9-scale token prices: large
+ * values get K/M suffixes, tiny ones the crypto-standard 0.0₈1165 notation. */
+function fmtPriceValue(v: number): string {
+  if (!Number.isFinite(v) || v <= 0) return "0";
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(2)}K`;
+  if (v >= 1) return v.toFixed(2);
+  if (v >= 0.01) return v.toFixed(4);
+  const zeros = Math.ceil(-Math.log10(v)) - 1;
+  const digits = Math.floor(v * 10 ** (zeros + 4))
+    .toString()
+    .padStart(4, "0");
+  const sub = String(zeros)
+    .split("")
+    .map((c) => SUBSCRIPTS[Number(c)])
+    .join("");
+  return `0.0${sub}${digits}`;
+}
 
 type Legend = {
   open: number;
@@ -61,6 +85,7 @@ export function CurveChart({ address }: { address: string }) {
         textColor: "#8a7a5c",
         attributionLogo: false,
       },
+      localization: { priceFormatter: fmtPriceValue },
       grid: {
         vertLines: { color: "rgba(138,122,92,0.12)" },
         horzLines: { color: "rgba(138,122,92,0.12)" },
@@ -75,7 +100,9 @@ export function CurveChart({ address }: { address: string }) {
       wickUpColor: "#16a34a",
       wickDownColor: "#ef4444",
       borderVisible: false,
-      priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
+      // Tiny minMove keeps 1e-9-scale prices from collapsing onto one axis
+      // label; display formatting is handled by the custom priceFormatter.
+      priceFormat: { type: "price", precision: 12, minMove: 1e-12 },
     });
     // Volume pane pinned to the bottom fifth of the chart.
     const volume = chart.addSeries(HistogramSeries, {
@@ -158,21 +185,17 @@ export function CurveChart({ address }: { address: string }) {
       }
     };
 
+    chartRef.current?.timeScale().applyOptions({ secondsVisible: res < 60 });
+
     void load();
-    const id = setInterval(() => void load(), 5_000);
+    const id = setInterval(() => void load(), res < 60 ? 2_000 : 5_000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
   }, [address, res, scale, usd, ethUsd]);
 
-  const fmtVal = (v: number) => {
-    const scaled = v * scale;
-    if (scaled >= 1_000_000) return `${(scaled / 1_000_000).toFixed(2)}M`;
-    if (scaled >= 1_000) return `${(scaled / 1_000).toFixed(2)}K`;
-    if (scaled >= 1) return scaled.toFixed(2);
-    return scaled.toPrecision(3);
-  };
+  const fmtVal = (v: number) => fmtPriceValue(v * scale);
 
   return (
     <div className="rounded-2xl border border-coop-straw/40 bg-coop-surface p-4 dark:border-coop-700 dark:bg-coop-900/60">
