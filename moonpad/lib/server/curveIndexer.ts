@@ -11,7 +11,12 @@ import { privateKeyToAccount } from "viem/accounts";
 import { coopLaunchpadV2Abi } from "@/lib/evm/abi/coopLaunchpadV2";
 import { coopLaunchTokenV2Abi } from "@/lib/evm/abi/coopLaunchTokenV2";
 import { coopLockerV2Abi } from "@/lib/evm/abi/coopLockerV2";
-import { activeChain, isEvmConfigured, launchpadAddress } from "@/lib/evm/chains";
+import {
+  activeChain,
+  indexerStartBlock,
+  isEvmConfigured,
+  launchpadAddress,
+} from "@/lib/evm/chains";
 import { curveDb, getMeta, setMeta, type CurveDb } from "@/lib/server/curveDb";
 
 /**
@@ -202,7 +207,7 @@ class CurveIndexerV2 {
     if (lastRaw !== null) {
       from = BigInt(lastRaw) + 1n;
     } else {
-      const start = process.env.EVM_INDEXER_START_BLOCK?.trim();
+      const start = indexerStartBlock();
       from = start ? BigInt(start) : latest;
     }
     if (from > latest) return;

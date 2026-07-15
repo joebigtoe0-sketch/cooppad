@@ -10,19 +10,22 @@ export default function DocsPage() {
   return (
     <DocShell title="How The Coop works">
       <Callout>
-        The Coop is a bonding-curve token launchpad on{" "}
-        <strong>Robinhood Chain</strong> (an Ethereum L2, gas paid in ETH).
-        Anyone can launch a token for free; it trades instantly on an automated
-        curve, and when the curve fills it graduates into a Uniswap v3 pool with
-        the liquidity locked forever.
+        The Coop is a token launchpad on <strong>Robinhood Chain</strong> (an
+        Ethereum L2, gas paid in ETH). Anyone can launch a token for free — and
+        every token trades on a <strong>real Uniswap v3 pool from its very
+        first block</strong>, with 100% of the liquidity locked forever. No
+        presale, no team allocation, no liquidity pull. Ever.
       </Callout>
 
       <Section heading="Launching a token">
         <p>
           Pick a name, ticker, and image, choose a token type, and confirm one
-          transaction. Launching is free — you only pay network gas. There is no
-          upfront liquidity requirement: the bonding curve is the market from
-          block one.
+          transaction. Launching is free — you only pay network gas. That single
+          transaction deploys the token, creates its Uniswap v3 pool, deposits
+          the <strong>entire 1,000,000,000 supply</strong> as liquidity, and
+          locks the position permanently. The pool is the market from second
+          one — visible on DEX Screener, GMGN, and every other terminal that
+          indexes Uniswap.
         </p>
         <p>
           You can optionally make a <strong>dev buy</strong> in the same
@@ -30,76 +33,60 @@ export default function DocsPage() {
           any sniper bot can front-run the launch.
         </p>
         <p>
-          Every token has a fixed supply of <strong>1,000,000,000</strong>. No
-          more can ever be minted, and the launchpad holds the entire supply at
-          creation — there are no team allocations unless the creator buys on
-          the curve like everyone else.
+          The supply is fixed — no minting, no owner, no blacklist — and the
+          token address always ends in <code className="font-mono">…c00</code>.
         </p>
       </Section>
 
-      <Section heading="The bonding curve">
+      <Section heading="The curve is the pool">
         <p>
-          Tokens trade on a constant-product curve (the same math as Uniswap,
-          with virtual reserves). Buys push the price up, sells push it down,
-          and the contract is always the counterparty — there is no order book
-          and no liquidity provider.
+          The launch deposits all tokens single-sided into the pool across a
+          price range starting at the launch price. Nobody can sell below that
+          floor (the pool holds no ETH yet), and every buy pushes the price up
+          the range — exactly like a classic bonding curve, except it&apos;s a
+          genuine Uniswap pool the whole time. ETH from buys accumulates
+          <em> inside the locked position</em>.
         </p>
         <p>
-          About <strong>790.6M tokens</strong> (~79% of supply) are sold on the
-          curve. The curve completes when it has raised{" "}
-          <strong>3.5 ETH</strong>. Buys that would overshoot the target are
-          partially filled with the excess refunded automatically.
-        </p>
-        <p>
-          Until graduation, tokens can only move between your wallet and the
-          launchpad — wallet-to-wallet transfers unlock after graduation. This
-          prevents anyone from setting up a fake pool mid-curve.
+          When the locked position has accumulated <strong>3.5 ETH</strong>,
+          the token earns its <strong>graduated</strong> badge. Nothing changes
+          on-chain — trading simply continues on the same pool — but the badge
+          marks a token whose market found real demand.
         </p>
       </Section>
 
-      <Section heading="Graduation">
-        <p>When the curve raises 3.5 ETH, the token graduates automatically:</p>
-        <ul className="list-disc space-y-1 pl-5">
-          <li>
-            The raised ETH (minus a flat 0.1 ETH graduation fee) is paired with
-            the remaining token supply into a full-range{" "}
-            <strong>Uniswap v3 pool at the 1% fee tier</strong>, opened at the
-            exact final curve price — no price gap.
-          </li>
-          <li>
-            The position is held by the locker contract, which has{" "}
-            <strong>
-              no function to withdraw liquidity — locked forever by construction
-            </strong>
-            . Nobody can pull it, ever.
-          </li>
-          <li>Leftover unpaired tokens are burned, reducing supply.</li>
-          <li>
-            The bonding curve closes for good; all further trading happens on
-            Uniswap. The locked position keeps earning the pool&apos;s swap
-            fees, which anyone can trigger for distribution.
-          </li>
-        </ul>
+      <Section heading="Locked liquidity">
+        <p>
+          The Uniswap position is held by the locker contract, which has{" "}
+          <strong>
+            no function to withdraw liquidity — locked forever by construction
+          </strong>
+          . Nobody can pull it: not the creator, not the platform. What the
+          locker can do is collect the pool&apos;s 1% swap fees — anyone can
+          trigger a collection at any time — and route them per the token type.
+        </p>
       </Section>
 
       <Section heading="Token types">
         <p>
-          Every Coop token is a fully clean, immutable ERC20 — no owner, no
-          minting, no transfer taxes, no blacklist, and the address always ends
-          in <code className="font-mono">…c00</code>. Fees live in the Uniswap
-          pool, never in the token, so wallets and scanners see a plain token.
-          The two types differ only in where the locked position&apos;s fee
-          stream goes:
+          <strong>Standard</strong> — a fully clean ERC20, no transfer tax.
+          Collected pool fees are split 50/50 between the creator and the
+          platform.
         </p>
         <p>
-          <strong>Standard</strong> — collected pool fees are split 50/50
-          between the creator and the platform.
+          <strong>🌱 LP-Growing</strong> — also tax-free. 70% of collected pool
+          fees are reinvested into the locked position (liquidity gets
+          permanently deeper with volume); the remaining 30% splits 50/50
+          between creator and platform.
         </p>
         <p>
-          <strong>LP-Growing</strong> — 70% of collected pool fees are
-          reinvested into the locked position (liquidity gets permanently
-          deeper with volume); the remaining 30% is split 50/50 between creator
-          and platform.
+          <strong>🔒 Super LP</strong> — carries a permanent{" "}
+          <strong>5% tax on buys</strong> (sells are never taxed). The tax
+          auto-compounds: it accumulates on the locker, and each collection
+          sells half for ETH, pairs it with the other half, and mints the
+          result into the locked position. 100% of the tax becomes permanently
+          locked liquidity — the price floor deepens with every buy. Pool fees
+          still split 50/50 like Standard.
         </p>
       </Section>
 
@@ -120,61 +107,56 @@ export default function DocsPage() {
                 <td className="py-2">— (gas only)</td>
               </tr>
               <tr className="border-b border-coop-straw/20 dark:border-coop-800">
-                <td className="py-2 pr-4">Curve buys &amp; sells</td>
+                <td className="py-2 pr-4">Every swap (Uniswap 1% pool tier)</td>
                 <td className="py-2 pr-4 font-mono">1%</td>
-                <td className="py-2">0.5% platform, 0.5% creator</td>
+                <td className="py-2">accrues to the locked position</td>
               </tr>
               <tr className="border-b border-coop-straw/20 dark:border-coop-800">
-                <td className="py-2 pr-4">Graduation</td>
-                <td className="py-2 pr-4 font-mono">0.1 ETH</td>
-                <td className="py-2">platform</td>
-              </tr>
-              <tr className="border-b border-coop-straw/20 dark:border-coop-800">
-                <td className="py-2 pr-4">Uniswap swaps (after graduation)</td>
-                <td className="py-2 pr-4 font-mono">1%</td>
-                <td className="py-2">pool fee tier — accrues to the locked position</td>
-              </tr>
-              <tr className="border-b border-coop-straw/20 dark:border-coop-800">
-                <td className="py-2 pr-4">Collected pool fees (Standard)</td>
+                <td className="py-2 pr-4">Collected pool fees (Standard, Super LP)</td>
                 <td className="py-2 pr-4 font-mono">—</td>
                 <td className="py-2">50% creator, 50% platform</td>
               </tr>
-              <tr>
+              <tr className="border-b border-coop-straw/20 dark:border-coop-800">
                 <td className="py-2 pr-4">Collected pool fees (LP-Growing)</td>
                 <td className="py-2 pr-4 font-mono">—</td>
                 <td className="py-2">70% reinvested into locked liquidity, rest 50/50</td>
+              </tr>
+              <tr>
+                <td className="py-2 pr-4">Buys of Super LP tokens</td>
+                <td className="py-2 pr-4 font-mono">5%</td>
+                <td className="py-2">100% auto-compounds into locked liquidity</td>
               </tr>
             </tbody>
           </table>
         </div>
         <p>
-          Creator earnings accrue on-chain and are claimable any time from your{" "}
+          Creator earnings are paid <strong>straight to the creator&apos;s
+          wallet</strong> every time the pool&apos;s fees are collected — no
+          claiming step. Trigger a collection any time from your{" "}
           <Link href="/portfolio" className="underline hover:text-coop-orange">
             portfolio
-          </Link>
-          .
+          </Link>{" "}
+          or the token page.
         </p>
       </Section>
 
       <Section heading="Trading tips">
         <ul className="list-disc space-y-1 pl-5">
           <li>
-            Quotes come straight from the contract and include the 1% curve fee.
+            Quotes are exact — they simulate the real swap, including the 1%
+            pool fee and (for Super LP) the 5% buy tax.
           </li>
           <li>
             Slippage protection is adjustable in the trade panel (default 2%).
           </li>
           <li>
-            Prices can be shown in USD or ETH — toggle in the top bar. USD
-            values use a live ETH price and are estimates.
+            Anti-snipe: buys in the launch block are blocked (except the
+            creator&apos;s dev buy), and for the first 2 minutes each wallet can
+            buy at most 2% of supply. Sells are never restricted.
           </li>
           <li>
-            A buy that completes the curve pays only what is needed; the rest is
-            refunded in the same transaction.
-          </li>
-          <li>
-            Anti-snipe: for the first 2 minutes after a launch, each wallet can
-            buy at most 2% of supply (the creator&apos;s dev buy is exempt).
+            Because every token is a normal Uniswap v3 pair, you can also trade
+            it on any terminal or aggregator that supports Robinhood Chain.
           </li>
         </ul>
       </Section>

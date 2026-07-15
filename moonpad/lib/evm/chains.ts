@@ -77,42 +77,78 @@ const chainsByKey: Record<string, Chain> = {
   local: localAnvil,
 };
 
+/**
+ * Canonical Coop V2 deployments per chain. Selecting the chain via
+ * NEXT_PUBLIC_EVM_CHAIN is the ONLY switch needed to go testnet <-> mainnet —
+ * addresses and the indexer start block follow automatically. Env vars
+ * (NEXT_PUBLIC_LAUNCHPAD_ADDRESS / NEXT_PUBLIC_ROUTER_ADDRESS /
+ * EVM_INDEXER_START_BLOCK) still override for local anvil runs.
+ */
+const DEPLOYMENTS: Record<
+  string,
+  { launchpad: `0x${string}`; router: `0x${string}`; startBlock: string } | undefined
+> = {
+  robinhood: {
+    launchpad: "0x39d80E039591dFA0C0C6016987982dd025498cC8",
+    router: "0x7490D61Ed78ba14d4535D74aA5EADb44f5921e5a",
+    startBlock: "10516434",
+  },
+  robinhoodTestnet: {
+    launchpad: "0x2f52bf3D414828171F46Bf90977BFAe525EB1d93",
+    router: "0xAce41967Cca6D0CCde8fDb04c596b76C3462aC5c",
+    startBlock: "90481000",
+  },
+};
+
+function chainKey(): string {
+  return process.env.NEXT_PUBLIC_EVM_CHAIN?.trim() || "local";
+}
+
 /** Active chain, selected with NEXT_PUBLIC_EVM_CHAIN=robinhood|robinhoodTestnet|local. */
 export function activeChain(): Chain {
-  const key = process.env.NEXT_PUBLIC_EVM_CHAIN?.trim() || "local";
-  const chain = chainsByKey[key];
+  const chain = chainsByKey[chainKey()];
   if (!chain) {
     throw new Error(
-      `Unknown NEXT_PUBLIC_EVM_CHAIN "${key}" (expected robinhood | robinhoodTestnet | local)`
+      `Unknown NEXT_PUBLIC_EVM_CHAIN "${chainKey()}" (expected robinhood | robinhoodTestnet | local)`
     );
   }
   return chain;
 }
 
 export function launchpadAddress(): `0x${string}` {
-  const addr = process.env.NEXT_PUBLIC_LAUNCHPAD_ADDRESS?.trim();
-  if (!addr || !addr.startsWith("0x")) {
-    throw new Error(
-      "NEXT_PUBLIC_LAUNCHPAD_ADDRESS is not set — deploy evm/script/Deploy.s.sol and set it"
-    );
-  }
-  return addr as `0x${string}`;
+  const env = process.env.NEXT_PUBLIC_LAUNCHPAD_ADDRESS?.trim();
+  if (env && env.startsWith("0x")) return env as `0x${string}`;
+  const deployment = DEPLOYMENTS[chainKey()];
+  if (deployment) return deployment.launchpad;
+  throw new Error(
+    "No launchpad for this chain — set NEXT_PUBLIC_LAUNCHPAD_ADDRESS (local/anvil runs need it)"
+  );
 }
 
 /** CoopRouter — the ETH<->token swap helper the trade widget uses. */
 export function routerAddress(): `0x${string}` {
-  const addr = process.env.NEXT_PUBLIC_ROUTER_ADDRESS?.trim();
-  if (!addr || !addr.startsWith("0x")) {
-    throw new Error(
-      "NEXT_PUBLIC_ROUTER_ADDRESS is not set — deploy evm/src/CoopRouter.sol and set it"
-    );
-  }
-  return addr as `0x${string}`;
+  const env = process.env.NEXT_PUBLIC_ROUTER_ADDRESS?.trim();
+  if (env && env.startsWith("0x")) return env as `0x${string}`;
+  const deployment = DEPLOYMENTS[chainKey()];
+  if (deployment) return deployment.router;
+  throw new Error(
+    "No router for this chain — set NEXT_PUBLIC_ROUTER_ADDRESS (local/anvil runs need it)"
+  );
+}
+
+/** First block the indexer scans on a fresh database. */
+export function indexerStartBlock(): string | undefined {
+  const env = process.env.EVM_INDEXER_START_BLOCK?.trim();
+  if (env) return env;
+  return DEPLOYMENTS[chainKey()]?.startBlock;
 }
 
 export function isEvmConfigured(): boolean {
-  const addr = process.env.NEXT_PUBLIC_LAUNCHPAD_ADDRESS?.trim();
-  return Boolean(addr && addr.startsWith("0x") && addr.length === 42);
+  try {
+    return launchpadAddress().length === 42;
+  } catch {
+    return false;
+  }
 }
 
 export function explorerUrl(kind: "tx" | "address" | "token", value: string): string {
