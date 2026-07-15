@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { formatEther } from "viem";
 import {
   useAccount,
@@ -18,6 +18,25 @@ import type { CurveTokenJson } from "@/types/curve";
 const Q128 = 1n << 128n;
 const BPS = 10_000n;
 const CREATOR_SHARE_BPS = 5_000n;
+const ZERO = "0x0000000000000000000000000000000000000000" as const;
+
+/** Minimal WETH surface: read balance, unwrap to native ETH. */
+const wethAbi = [
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "withdraw",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "wad", type: "uint256" }],
+    outputs: [],
+  },
+] as const;
 
 /** Minimal Uniswap v3 pool surface needed to preview uncollected fees. */
 const poolAbi = [
@@ -122,12 +141,56 @@ export function CreatorRewards({ token }: { token: CurveTokenJson }) {
   const { data: growth1 } = useReadContract({ ...poolQuery, functionName: "feeGrowthGlobal1X128" });
   const { data: token0 } = useReadContract({ ...poolQuery, functionName: "token0" });
 
-  const { writeContract, data: txHash, isPending } = useWriteContract();
-  const { isSuccess: confirmed } = useWaitForTransactionReceipt({ hash: txHash });
+  // WETH the locker pays out as fees — read so we can unwrap it to native ETH.
+  const { data: wethAddr } = useReadContract({
+    abi: coopLaunchpadV2Abi,
+    address: launchpad,
+    functionName: "weth",
+    query: { enabled: isCreator },
+  });
+  const { data: wethBal, refetch: refetchWeth } = useReadContract({
+    abi: wethAbi,
+    address: wethAddr,
+    functionName: "balanceOf",
+    args: [account ?? ZERO],
+    query: {
+      enabled: Boolean(isCreator && wethAddr && account),
+      refetchInterval: 15_000,
+    },
+  });
+
+  // Two-step claim: collect() pays WETH to the wallet, then we unwrap it to ETH
+  // (the locker can't send native ETH without a redeploy). Kept as two txs and
+  // chained here so a claim ends with ETH in the wallet, not WETH.
+  const { writeContract: writeCollect, data: collectHash, isPending: collecting } =
+    useWriteContract();
+  const { isSuccess: collected } = useWaitForTransactionReceipt({ hash: collectHash });
+  const { writeContract: writeUnwrap, data: unwrapHash, isPending: unwrapping } =
+    useWriteContract();
+  const { isSuccess: unwrapped } = useWaitForTransactionReceipt({ hash: unwrapHash });
+
+  const [autoUnwrap, setAutoUnwrap] = useState(false);
+
+  const unwrapWeth = (amount: bigint) => {
+    if (!wethAddr || amount <= 0n) return;
+    writeUnwrap({ abi: wethAbi, address: wethAddr, functionName: "withdraw", args: [amount] });
+  };
+
+  // When the collect confirms, sweep the freshly-received WETH into ETH.
+  useEffect(() => {
+    if (!collected || !autoUnwrap) return;
+    setAutoUnwrap(false);
+    void (async () => {
+      void refetchPos();
+      const { data } = await refetchWeth();
+      unwrapWeth((data as bigint | undefined) ?? 0n);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collected, autoUnwrap]);
 
   useEffect(() => {
-    if (confirmed) void refetchPos();
-  }, [confirmed, refetchPos]);
+    if (unwrapped) void refetchWeth();
+  }, [unwrapped, refetchWeth]);
 
   if (!isCreator) return null;
 
@@ -171,8 +234,8 @@ export function CreatorRewards({ token }: { token: CurveTokenJson }) {
             ) : null}
           </p>
           <p className="text-[11px] text-coop-wood/65 dark:text-coop-shell/55">
-            Your share of uncollected pool fees — paid straight to your wallet on
-            collect
+            Your share of uncollected pool fees — paid to your wallet on collect,
+            then auto-unwrapped to ETH
             {token.flavor === "lpGrow"
               ? " (70% reinvests into locked liquidity first)"
               : token.flavor === "superLp"
@@ -182,21 +245,37 @@ export function CreatorRewards({ token }: { token: CurveTokenJson }) {
         </div>
         <button
           type="button"
-          disabled={isPending || !lockerAddr || !hasPoolFees}
-          onClick={() =>
-            lockerAddr &&
-            writeContract({
+          disabled={collecting || unwrapping || !lockerAddr || !hasPoolFees}
+          onClick={() => {
+            if (!lockerAddr) return;
+            setAutoUnwrap(true);
+            writeCollect({
               abi: coopLockerV2Abi,
               address: lockerAddr,
               functionName: "collect",
               args: [token.address as `0x${string}`],
-            })
-          }
-          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
+            });
+          }}
+          className="shrink-0 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
         >
-          Collect
+          {collecting ? "Collecting…" : unwrapping ? "Unwrapping…" : "Collect"}
         </button>
       </div>
+
+      {/* Leftover WETH from earlier claims (or a claim whose unwrap was skipped)
+          — one tap to convert it to native ETH. */}
+      {wethBal && wethBal > 0n && !autoUnwrap ? (
+        <button
+          type="button"
+          disabled={unwrapping || collecting}
+          onClick={() => unwrapWeth(wethBal)}
+          className="mt-3 w-full rounded-lg border border-coop-yolk/50 px-3 py-1.5 text-[11px] font-bold text-coop-wood transition hover:bg-coop-yolk/10 disabled:opacity-40 dark:text-coop-shell"
+        >
+          {unwrapping
+            ? "Unwrapping…"
+            : `Unwrap ${Number(formatEther(wethBal)).toFixed(5)} WETH → ETH`}
+        </button>
+      ) : null}
     </div>
   );
 }
