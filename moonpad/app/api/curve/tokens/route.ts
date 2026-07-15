@@ -6,11 +6,14 @@ import { tokenRowToJson } from "@/lib/server/curveDto";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// Supply is fixed at 1B for every token, so last_price sorts by market cap
+// exactly. raised_wei is the WETH principal in the locked position (progress
+// toward graduation). v_eth is a dead V1 column — never order by it.
 const SORTS: Record<string, string> = {
   new: "t.created_at DESC",
-  marketcap: "t.v_eth DESC",
+  marketcap: "t.last_price DESC, t.last_trade_at DESC NULLS LAST",
   volume: "t.volume_wei DESC",
-  progress: "t.phase DESC, t.v_eth DESC",
+  progress: "t.phase DESC, t.raised_wei DESC",
   activity: "t.last_trade_at DESC NULLS LAST",
   gainers: "t.last_trade_at DESC NULLS LAST", // ordered by change24h in JS below
 };
@@ -39,10 +42,23 @@ export async function GET(req: Request) {
        ${where} ORDER BY ${sort} LIMIT ${limit}`
     );
 
-    // King of the hill: live token closest to graduation.
+    // King of the coop: the trending token — most real (non-crank) trading
+    // volume over the last 24h, freshest activity breaking ties. Falls back to
+    // deepest pool when the whole chain has been quiet for a day.
     const koth = await db.query(
-      `SELECT * FROM curve_tokens WHERE phase = 1 AND trade_count > 0
-       ORDER BY v_eth DESC LIMIT 1`
+      `SELECT t.*
+       FROM curve_tokens t
+       LEFT JOIN (
+         SELECT token, SUM(eth_wei) AS vol24
+         FROM curve_trades
+         WHERE ts > now() - interval '24 hours' AND NOT internal
+         GROUP BY token
+       ) v ON v.token = t.address
+       WHERE t.phase = 1 AND t.trade_count > 0
+       ORDER BY COALESCE(v.vol24, 0) DESC,
+                t.last_trade_at DESC NULLS LAST,
+                t.raised_wei DESC
+       LIMIT 1`
     );
 
     let tokens = res.rows.map(tokenRowToJson);
