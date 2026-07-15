@@ -1,6 +1,10 @@
+import { randomBytes } from "crypto";
+
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
+
+const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL?.trim() || "https://thecoop.fun";
 
 /**
  * Pins the token's image + metadata JSON to IPFS (Pinata) for an EVM curve launch.
@@ -87,12 +91,20 @@ export async function POST(req: Request) {
       imageUri = process.env.PINATA_DEFAULT_TOKEN_IMAGE_URL;
     }
 
+    // Tokens launched without a website get a permanent /l/<id> short link
+    // baked into the metadata — external terminals (Axiom, GMGN, DEXScreener)
+    // read links from this JSON, not from our API. The coin-page URL can't go
+    // here directly: the token's CREATE2 address hashes this very JSON's CID
+    // (metadataURI is a constructor arg), so the address doesn't exist yet.
+    // /l/<id> resolves to /coin/<address> once the token is indexed.
+    const website = text("website", 200) || `${SITE_URL}/l/${randomBytes(6).toString("hex")}`;
+
     const metadata: Record<string, string> = {
       name,
       symbol,
       description: text("description", 1000),
       image: imageUri,
-      website: text("website", 200),
+      website,
       twitter: text("twitter", 200),
       telegram: text("telegram", 200),
     };

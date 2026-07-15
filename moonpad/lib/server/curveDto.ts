@@ -16,8 +16,14 @@ export function tokenRowToJson(row: Record<string, unknown>): CurveTokenJson {
   const basePrice = row.base_price != null ? Number(row.base_price) : START_PRICE;
   const change24h = basePrice > 0 && Number(row.trade_count ?? 0) > 0 ? price / basePrice - 1 : 0;
   // Tokens without a creator-supplied website get their Coop page as the
-  // canonical link — every token always has a home.
-  const website = String(row.website ?? "") || `${SITE_URL}/coin/${String(row.address)}`;
+  // canonical link — every token always has a home. New launches pin a
+  // /l/<id> short link into the metadata itself (the address isn't knowable
+  // pre-launch); render that as the resolved coin URL on our own surfaces.
+  const rawWebsite = String(row.website ?? "");
+  const website =
+    !rawWebsite || rawWebsite.startsWith(`${SITE_URL}/l/`)
+      ? `${SITE_URL}/coin/${String(row.address)}`
+      : rawWebsite;
 
   return {
     address: String(row.address),
