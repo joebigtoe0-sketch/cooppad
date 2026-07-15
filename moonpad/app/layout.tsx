@@ -24,9 +24,18 @@ const fontDisplay = Montserrat({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://thecoop.fun"),
   title: "The Coop — token launchpad on Robinhood Chain",
   description:
-    "Launch a token on the bonding curve and graduate it into a Uniswap pool on Robinhood Chain. thecoop.gg",
+    "Launch a token straight into a locked Uniswap v3 pool on Robinhood Chain. Free launches, liquidity locked forever. thecoop.fun",
+  openGraph: {
+    title: "The Coop — token launchpad on Robinhood Chain",
+    description:
+      "Launch a token straight into a locked Uniswap v3 pool on Robinhood Chain. Free launches, liquidity locked forever.",
+    url: "https://thecoop.fun",
+    siteName: "The Coop",
+    images: [{ url: "/logo.png" }],
+  },
   icons: {
     icon: "/logo.png",
     apple: "/logo.png",
