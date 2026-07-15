@@ -3,15 +3,64 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import type { ReactNode } from "react";
 
-type NavItem = { href: string; label: string; icon: string; disabled?: boolean };
+type NavItem = { href: string; label: string; icon: ReactNode; disabled?: boolean };
+
+// Inline SVGs instead of unicode glyphs — glyph icons render at wildly
+// different widths per device font and can wrap inside the w-5 box.
+const ICON = "h-4 w-4";
 
 const items: NavItem[] = [
-  { href: "/", label: "The Coop", icon: "◇" },
-  { href: "/launch", label: "Launch token", icon: "◎" },
-  { href: "/portfolio", label: "Portfolio", icon: "▤" },
-  { href: "/analytics", label: "Analytics", icon: "▁▃▅" },
-  { href: "/docs", label: "Docs", icon: "▧" },
+  {
+    href: "/",
+    label: "The Coop",
+    icon: (
+      <svg className={ICON} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden>
+        <path d="M8 1.8 14.2 8 8 14.2 1.8 8Z" />
+      </svg>
+    ),
+  },
+  {
+    href: "/launch",
+    label: "Launch token",
+    icon: (
+      <svg className={ICON} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+        <circle cx="8" cy="8" r="6.2" />
+        <circle cx="8" cy="8" r="2" fill="currentColor" stroke="none" />
+      </svg>
+    ),
+  },
+  {
+    href: "/portfolio",
+    label: "Portfolio",
+    icon: (
+      <svg className={ICON} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden>
+        <rect x="2" y="2.5" width="12" height="11" rx="1.5" />
+        <path d="M2 6.5h12M2 10.5h12" />
+      </svg>
+    ),
+  },
+  {
+    href: "/analytics",
+    label: "Analytics",
+    icon: (
+      <svg className={ICON} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+        <path d="M3 13.5V10M8 13.5V6.5M13 13.5V3" />
+      </svg>
+    ),
+  },
+  {
+    href: "/docs",
+    label: "Docs",
+    icon: (
+      <svg className={ICON} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" aria-hidden>
+        <path d="M4 1.8h5.5L13 5.3v8.9H4Z" />
+        <path d="M9.5 1.8v3.5H13" />
+        <path d="M6.3 9h3.4M6.3 11.2h3.4" />
+      </svg>
+    ),
+  },
 ];
 
 export function CoopSidebar({
@@ -64,7 +113,7 @@ export function CoopSidebar({
           if (item.disabled) {
             return (
               <span key={item.label} className={cls}>
-                <span className="w-5 text-center opacity-70">{item.icon}</span>
+                <span className="flex w-5 shrink-0 justify-center opacity-70">{item.icon}</span>
                 {item.label}
                 <span className="ml-auto text-[10px] font-normal text-coop-wood/40">
                   soon
@@ -79,7 +128,7 @@ export function CoopSidebar({
               onClick={onNavigate}
               className={cls}
             >
-              <span className="w-5 text-center">{item.icon}</span>
+              <span className="flex w-5 shrink-0 justify-center">{item.icon}</span>
               {item.label}
             </Link>
           );
