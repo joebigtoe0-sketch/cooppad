@@ -46,12 +46,32 @@ contract V2LockerTest is BaseSetupV2 {
         // Tax is 5% of the gross pool output; alice got the other 95%.
         assertApproxEqRel(taxHeld, out * 500 / 9500, 1e15, "5% buy tax skimmed to locker");
 
-        // A sell generates WETH fees for the position; collect pairs them with
-        // the tax balance and mints more locked liquidity.
-        _sell(token, CoopLaunchTokenV2(token).balanceOf(alice) / 2, alice);
+        // collect() swap-and-liquifies the tax: half sold for WETH, paired,
+        // minted into the locked position — no sells or fees required.
         uint128 liqBefore = _positionLiquidity(token);
         locker.collect(token);
-        assertGt(_positionLiquidity(token), liqBefore, "tax + fees compound into locked LP");
+        assertGt(_positionLiquidity(token), liqBefore, "tax compounds into locked LP");
+        assertLt(
+            CoopLaunchTokenV2(token).balanceOf(address(locker)),
+            taxHeld,
+            "tax balance consumed by compounding"
+        );
+    }
+
+    function test_SuperLP_PoolFeesStillSplitFiftyFifty() public {
+        address token = _launch(CoopLaunchpadV2.Flavor.SuperLP);
+        _buy(token, 2 ether, alice);
+        _sell(token, CoopLaunchTokenV2(token).balanceOf(alice) / 2, alice);
+
+        uint256 creatorWethBefore = weth.balanceOf(creator);
+        uint256 platformWethBefore = weth.balanceOf(platform);
+
+        locker.collect(token);
+
+        uint256 creatorGain = weth.balanceOf(creator) - creatorWethBefore;
+        uint256 platformGain = weth.balanceOf(platform) - platformWethBefore;
+        assertGt(creatorGain, 0, "creator earns WETH fees");
+        assertApproxEqAbs(creatorGain, platformGain, 2, "fees split 50/50, tax handled separately");
     }
 
     function test_SuperLP_SellsAreNeverTaxed() public {

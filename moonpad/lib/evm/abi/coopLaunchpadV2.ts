@@ -101,19 +101,6 @@ export const coopLaunchpadV2Abi = [
   },
   {
     "type": "function",
-    "name": "SUPER_LP_REINVEST_BPS",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint16",
-        "internalType": "uint16"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "TICK_SPACING",
     "inputs": [],
     "outputs": [

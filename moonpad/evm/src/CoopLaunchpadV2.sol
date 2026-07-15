@@ -26,7 +26,7 @@ contract CoopLaunchpadV2 is Ownable, ReentrancyGuard {
     enum Flavor {
         Standard, // clean token, pool fees split 50/50 creator/platform
         LPGrow, // clean token, 70% of pool fees reinvested into locked LP
-        SuperLP // 5% buy tax deepens locked LP, 50% of pool fees reinvested
+        SuperLP // 5% buy tax swap-and-liquified into locked LP; fees split 50/50
     }
 
     uint24 public constant POOL_FEE = 10_000; // Uniswap v3 1% tier
@@ -38,7 +38,6 @@ contract CoopLaunchpadV2 is Ownable, ReentrancyGuard {
     uint256 public constant GRADUATION_WETH = 3.5 ether;
 
     uint16 public constant LP_GROW_REINVEST_BPS = 7_000;
-    uint16 public constant SUPER_LP_REINVEST_BPS = 5_000;
     uint16 public constant SUPER_LP_BUY_TAX_BPS = 500;
 
     address private constant DEAD = 0x000000000000000000000000000000000000dEaD;
@@ -211,7 +210,9 @@ contract CoopLaunchpadV2 is Ownable, ReentrancyGuard {
     function _flavorParams(Flavor flavor) private pure returns (uint16 taxBps, uint16 reinvestBps) {
         if (flavor == Flavor.Standard) return (0, 0);
         if (flavor == Flavor.LPGrow) return (0, LP_GROW_REINVEST_BPS);
-        return (SUPER_LP_BUY_TAX_BPS, SUPER_LP_REINVEST_BPS);
+        // Super LP: the tax compounds via swap-and-liquify in the locker;
+        // pool fees themselves are split 50/50 like Standard.
+        return (SUPER_LP_BUY_TAX_BPS, 0);
     }
 
     /// @dev Token as token0: pool starts at the bottom of the range, all

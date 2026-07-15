@@ -10,6 +10,10 @@ interface ICoopLaunchpadV2Fees {
     function feeRecipient() external view returns (address);
 }
 
+interface ICoopTokenTax {
+    function buyTaxBps() external view returns (uint16);
+}
+
 /// @notice Holds every Coop v2 token's single-sided Uniswap v3 launch position
 /// forever. There is deliberately NO function that can decrease liquidity —
 /// the position is locked by construction. What the locker can do is collect
@@ -18,12 +22,20 @@ interface ICoopLaunchpadV2Fees {
 ///   Standard:   all collected fees split 50/50 creator / platform.
 ///   LP-Growing: `reinvestBps` (70%) of collected fees is re-added to the
 ///               locked position; the remainder is split 50/50.
-///   Super LP:   the token's permanent 5% buy tax lands on this contract and
-///               is paired with `reinvestBps` (50%) of collected fees to mint
-///               more locked liquidity; the remaining fees split 50/50.
+///   Super LP:   fees split 50/50 exactly like Standard. Separately, the
+///               token's permanent 5% buy tax accumulates here and `collect`
+///               swap-and-liquifies it: half is sold to the pool for WETH
+///               (price impact capped per crank), paired with the other half,
+///               and minted into the locked position — 100% of the tax
+///               becomes permanently locked liquidity over time.
 contract CoopLockerV2 is ReentrancyGuard {
     uint256 public constant BPS = 10_000;
     uint256 public constant CREATOR_SHARE_BPS = 5_000; // of the payout portion
+    /// Per-crank cap on how far the tax-compounding sell may move sqrt(price),
+    /// ~2.5% in price terms. A large tax pile compounds over several cranks.
+    uint256 public constant COMPOUND_SQRT_LIMIT_BPS = 125;
+    /// Don't bother compounding dust.
+    uint256 public constant MIN_COMPOUND_TOKENS = 1_000 ether;
 
     struct Lock {
         address pool;
@@ -50,6 +62,9 @@ contract CoopLockerV2 is ReentrancyGuard {
         uint256 reinvested0,
         uint256 reinvested1,
         uint128 liquidityAdded
+    );
+    event TaxCompounded(
+        address indexed token, uint256 tokensAdded, uint256 pairAdded, uint128 liquidityAdded
     );
 
     constructor(address launchpad_) {
@@ -87,6 +102,12 @@ contract CoopLockerV2 is ReentrancyGuard {
         require(lock.pool != address(0), "Locker: unknown token");
         IUniswapV3PoolMin pool = IUniswapV3PoolMin(lock.pool);
 
+        // Super LP: compound accumulated buy tax into locked liquidity first,
+        // while the token balance on this contract is still purely tax.
+        if (ICoopTokenTax(token).buyTaxBps() > 0) {
+            _compoundTax(token, lock, pool);
+        }
+
         // Poke the position so fees owed are up to date, then pull them here.
         pool.burn(lock.tickLower, lock.tickUpper, 0);
         (uint128 collected0, uint128 collected1) =
@@ -122,6 +143,49 @@ contract CoopLockerV2 is ReentrancyGuard {
         _payout(tokenIs0 ? pool.token1() : pool.token0(), payoutPair, lock.creator);
 
         emit FeesCollected(token, collected0, collected1, spent0, spent1, liquidityAdded);
+    }
+
+    /// @dev Swap-and-liquify the buy-tax balance: sell half for WETH (bounded
+    /// price impact per crank), pair the halves, and mint them into the locked
+    /// position. Unsold/unpaired remainders simply wait for the next crank.
+    function _compoundTax(address token, Lock memory lock, IUniswapV3PoolMin pool) private {
+        uint256 taxBal = IERC20Min(token).balanceOf(address(this));
+        if (taxBal < MIN_COMPOUND_TOKENS) return;
+
+        bool tokenIs0 = token == pool.token0();
+        address pairAsset = tokenIs0 ? pool.token1() : pool.token0();
+        uint256 pairBefore = IERC20Min(pairAsset).balanceOf(address(this));
+
+        {
+            // Selling the token moves price away from it; cap the move.
+            (uint160 sqrtP,,,,,,) = pool.slot0();
+            uint160 limit = tokenIs0
+                ? uint160(uint256(sqrtP) * (BPS - COMPOUND_SQRT_LIMIT_BPS) / BPS)
+                : uint160(uint256(sqrtP) * (BPS + COMPOUND_SQRT_LIMIT_BPS) / BPS);
+            _pendingPool = address(pool);
+            // A sell can legitimately fail (e.g. price already pinned at the
+            // limit); the tax just waits for the next crank in that case.
+            try pool.swap(
+                address(this),
+                tokenIs0,
+                int256(taxBal / 2),
+                limit,
+                abi.encode(pool.token0(), pool.token1())
+            ) returns (int256, int256) {} catch {}
+            _pendingPool = address(0);
+        }
+
+        // Pair whatever WETH the sell yielded with the remaining tax tokens.
+        uint256 pairGained = IERC20Min(pairAsset).balanceOf(address(this)) - pairBefore;
+        if (pairGained == 0) return;
+        uint256 tokenLeft = IERC20Min(token).balanceOf(address(this));
+        (uint256 spent0, uint256 spent1, uint128 added) = _reinvest(
+            pool,
+            lock,
+            tokenIs0 ? tokenLeft : pairGained,
+            tokenIs0 ? pairGained : tokenLeft
+        );
+        emit TaxCompounded(token, tokenIs0 ? spent0 : spent1, tokenIs0 ? spent1 : spent0, added);
     }
 
     function _reinvest(IUniswapV3PoolMin pool, Lock memory lock, uint256 budget0, uint256 budget1)
@@ -176,6 +240,16 @@ contract CoopLockerV2 is ReentrancyGuard {
         (address token0, address token1) = abi.decode(data, (address, address));
         if (amount0Owed > 0) IERC20Min(token0).transfer(msg.sender, amount0Owed);
         if (amount1Owed > 0) IERC20Min(token1).transfer(msg.sender, amount1Owed);
+    }
+
+    /// @dev Pays the input side of the tax-compounding sell.
+    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data)
+        external
+    {
+        require(msg.sender == _pendingPool, "Locker: bad callback");
+        (address token0, address token1) = abi.decode(data, (address, address));
+        if (amount0Delta > 0) IERC20Min(token0).transfer(msg.sender, uint256(amount0Delta));
+        if (amount1Delta > 0) IERC20Min(token1).transfer(msg.sender, uint256(amount1Delta));
     }
 
     /// @notice Position key of a locked token's position, for off-chain inspection.

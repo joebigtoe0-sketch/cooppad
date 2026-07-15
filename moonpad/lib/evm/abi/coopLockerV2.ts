@@ -26,7 +26,33 @@ export const coopLockerV2Abi = [
   },
   {
     "type": "function",
+    "name": "COMPOUND_SQRT_LIMIT_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "CREATOR_SHARE_BPS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "MIN_COMPOUND_TOKENS",
     "inputs": [],
     "outputs": [
       {
@@ -183,6 +209,29 @@ export const coopLockerV2Abi = [
     "stateMutability": "nonpayable"
   },
   {
+    "type": "function",
+    "name": "uniswapV3SwapCallback",
+    "inputs": [
+      {
+        "name": "amount0Delta",
+        "type": "int256",
+        "internalType": "int256"
+      },
+      {
+        "name": "amount1Delta",
+        "type": "int256",
+        "internalType": "int256"
+      },
+      {
+        "name": "data",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
     "type": "event",
     "name": "FeesCollected",
     "inputs": [
@@ -258,6 +307,37 @@ export const coopLockerV2Abi = [
         "type": "int24",
         "indexed": false,
         "internalType": "int24"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "TaxCompounded",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "tokensAdded",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "pairAdded",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "liquidityAdded",
+        "type": "uint128",
+        "indexed": false,
+        "internalType": "uint128"
       }
     ],
     "anonymous": false
