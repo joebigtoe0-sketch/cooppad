@@ -41,6 +41,8 @@ export function CurveTradeWidget({
   const [amount, setAmount] = useState("");
   // Denomination of the buy input; follows the global display currency initially.
   const [inputCur, setInputCur] = useState<"ETH" | "USD">("ETH");
+  // Sell input denomination: token amount, or the ETH/USD you want to receive.
+  const [sellCur, setSellCur] = useState<"TOKEN" | "ETH" | "USD">("TOKEN");
   const [slippagePct, setSlippagePct] = useState(2);
   const [customSlippage, setCustomSlippage] = useState("");
 
@@ -86,15 +88,6 @@ export function CurveTradeWidget({
     }
   }, [amount, tab, usdMode, ethUsd]);
 
-  const sellTokens = useMemo(() => {
-    if (tab !== "sell") return 0n;
-    try {
-      return parseEther(amount || "0"); // tokens are 18-dec too
-    } catch {
-      return 0n;
-    }
-  }, [amount, tab]);
-
   const { data: balance, refetch: refetchBalance } = useReadContract({
     abi: coopLaunchTokenV2Abi,
     address: tokenAddr,
@@ -102,6 +95,26 @@ export function CurveTradeWidget({
     args: [account ?? "0x0000000000000000000000000000000000000000"],
     query: { enabled: Boolean(account) },
   });
+
+  const sellTokens = useMemo(() => {
+    if (tab !== "sell") return 0n;
+    try {
+      if (sellCur === "TOKEN") {
+        return parseEther(amount || "0"); // tokens are 18-dec too
+      }
+      // "I want to receive N ETH / $N" — invert price (+1% pool fee) into a
+      // token amount, capped at the wallet balance.
+      const n = Number(amount);
+      if (!Number.isFinite(n) || n <= 0 || token.priceEth <= 0) return 0n;
+      const ethWanted = sellCur === "USD" ? (ethUsd > 0 ? n / ethUsd : 0) : n;
+      if (ethWanted <= 0) return 0n;
+      let wei = parseEther((ethWanted / (token.priceEth * 0.99)).toFixed(18));
+      if (balance !== undefined && wei > balance) wei = balance;
+      return wei;
+    } catch {
+      return 0n;
+    }
+  }, [amount, tab, sellCur, token.priceEth, ethUsd, balance]);
 
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
     abi: coopLaunchTokenV2Abi,
@@ -277,9 +290,31 @@ export function CurveTradeWidget({
               </span>
             </span>
           ) : (
-            <span>Sell ({token.symbol})</span>
+            <span className="flex items-center gap-1.5">
+              Sell
+              <span className="flex rounded-md border border-coop-straw/40 p-0.5 dark:border-coop-700">
+                {(["TOKEN", "ETH", "USD"] as const).map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    disabled={c === "USD" && ethUsd <= 0}
+                    onClick={() => {
+                      setSellCur(c);
+                      setAmount("");
+                    }}
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-bold transition disabled:opacity-40 ${
+                      sellCur === c
+                        ? "bg-coop-yolk/30 text-coop-ink dark:bg-coop-yolk/20 dark:text-coop-shell"
+                        : "text-coop-wood/60 dark:text-coop-shell/50"
+                    }`}
+                  >
+                    {c === "TOKEN" ? token.symbol : c}
+                  </button>
+                ))}
+              </span>
+            </span>
           )}
-          {tab === "sell" && balance !== undefined ? (
+          {tab === "sell" && sellCur === "TOKEN" && balance !== undefined ? (
             <button
               type="button"
               className="font-mono underline decoration-dotted"
@@ -298,7 +333,13 @@ export function CurveTradeWidget({
             className="w-full rounded-xl border border-coop-straw/50 bg-coop-canvas px-3 py-2.5 pr-14 font-mono text-lg font-semibold text-coop-ink outline-none transition focus:border-coop-yolk dark:border-coop-700 dark:bg-coop-950 dark:text-coop-shell"
           />
           <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-coop-wood/50 dark:text-coop-shell/40">
-            {tab === "buy" ? (usdMode ? "USD" : "ETH") : token.symbol}
+            {tab === "buy"
+              ? usdMode
+                ? "USD"
+                : "ETH"
+              : sellCur === "TOKEN"
+                ? token.symbol
+                : sellCur}
           </span>
         </div>
         {tab === "buy" ? (
@@ -314,7 +355,7 @@ export function CurveTradeWidget({
               </button>
             ))}
           </div>
-        ) : (
+        ) : sellCur === "TOKEN" ? (
           <div className="mt-1 flex gap-1.5">
             {[25, 50, 100].map((pct) => (
               <button
@@ -328,6 +369,19 @@ export function CurveTradeWidget({
                 className="rounded-lg border border-coop-straw/40 px-2 py-1 text-[11px] font-bold text-coop-wood/75 transition hover:border-coop-yolk dark:border-coop-700 dark:text-coop-shell/60"
               >
                 {pct}%
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-1 flex gap-1.5">
+            {(sellCur === "USD" ? USD_PRESETS : ETH_PRESETS).map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setAmount(v)}
+                className="rounded-lg border border-coop-straw/40 px-2 py-1 text-[11px] font-bold text-coop-wood/75 transition hover:border-coop-yolk dark:border-coop-700 dark:text-coop-shell/60"
+              >
+                {sellCur === "USD" ? `$${v}` : `${v} ETH`}
               </button>
             ))}
           </div>
@@ -364,10 +418,24 @@ export function CurveTradeWidget({
             <span>Enter an amount to see the quote (1% pool fee included).</span>
           )
         ) : sellTokens > 0n && sellEstimate > 0n ? (
-          <div className="flex justify-between">
-            <span>You receive ≈</span>
-            <span className="font-mono font-bold">{fmt(Number(formatEther(sellEstimate)))}</span>
-          </div>
+          <>
+            {sellCur !== "TOKEN" ? (
+              <div className="flex justify-between text-coop-wood/60 dark:text-coop-shell/50">
+                <span>Selling ≈</span>
+                <span className="font-mono">
+                  {Number(formatEther(sellTokens)).toLocaleString("en-US", {
+                    maximumFractionDigits: 0,
+                  })}{" "}
+                  {token.symbol}
+                  {balance !== undefined && sellTokens === balance ? " (max)" : ""}
+                </span>
+              </div>
+            ) : null}
+            <div className={sellCur !== "TOKEN" ? "mt-1 flex justify-between" : "flex justify-between"}>
+              <span>You receive ≈</span>
+              <span className="font-mono font-bold">{fmt(Number(formatEther(sellEstimate)))}</span>
+            </div>
+          </>
         ) : (
           <span>Enter an amount to see the quote (1% pool fee included).</span>
         )}
