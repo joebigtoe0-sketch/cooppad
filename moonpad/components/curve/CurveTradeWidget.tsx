@@ -263,7 +263,7 @@ export function CurveTradeWidget({
     <div className="rounded-2xl border border-coop-straw/40 bg-coop-surface p-4 dark:border-coop-700 dark:bg-coop-900/60">
       {token.phase === "graduated" ? (
         <div className="mb-3 flex items-center gap-2 rounded-xl bg-emerald-500/10 px-3 py-2 text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
-          🎓 Graduated — 3.5+ ETH in the locked pool. Trading never stops.
+          🎓 Graduated — bonding curve complete. Trading never stops.
         </div>
       ) : null}
       {snipeWindowActive ? (
