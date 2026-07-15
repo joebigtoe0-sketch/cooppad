@@ -1,7 +1,7 @@
 export type CurveTokenJson = {
   address: string;
   creator: string;
-  flavor: "standard" | "lpGrow";
+  flavor: "standard" | "lpGrow" | "superLp";
   name: string;
   symbol: string;
   metadataUri: string;
@@ -56,4 +56,34 @@ export type CurveHolderJson = {
   balance: string;
   pct: number;
   tag?: "creator" | "pair" | "burn" | "curve";
+};
+
+export type AnalyticsBucketJson = {
+  day: string; // YYYY-MM-DD
+  volumeEth: number;
+  launches: number;
+  trades: number;
+};
+
+export type AnalyticsJson = {
+  period: "24h" | "7d" | "30d" | "all";
+  launches: number;
+  launchesAllTime: number;
+  volumeEth: number;
+  trades: number;
+  buys: number;
+  sells: number;
+  protocolRevenueEth: number;
+  creatorRevenueEth: number;
+  graduatedAllTime: number;
+  buckets: AnalyticsBucketJson[];
+  topTokens: {
+    address: string;
+    name: string;
+    symbol: string;
+    imageUrl: string;
+    volumeEth: number;
+    tradeCount: number;
+  }[];
+  updatedAt: string;
 };

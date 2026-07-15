@@ -99,6 +99,17 @@ export function launchpadAddress(): `0x${string}` {
   return addr as `0x${string}`;
 }
 
+/** CoopRouter — the ETH<->token swap helper the trade widget uses. */
+export function routerAddress(): `0x${string}` {
+  const addr = process.env.NEXT_PUBLIC_ROUTER_ADDRESS?.trim();
+  if (!addr || !addr.startsWith("0x")) {
+    throw new Error(
+      "NEXT_PUBLIC_ROUTER_ADDRESS is not set — deploy evm/src/CoopRouter.sol and set it"
+    );
+  }
+  return addr as `0x${string}`;
+}
+
 export function isEvmConfigured(): boolean {
   const addr = process.env.NEXT_PUBLIC_LAUNCHPAD_ADDRESS?.trim();
   return Boolean(addr && addr.startsWith("0x") && addr.length === 42);

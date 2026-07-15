@@ -201,7 +201,7 @@ export function CoinPageClient({ address }: { address: string }) {
               Bonding curve {pct}%
             </span>
             <span className="font-mono text-coop-wood/70 dark:text-coop-shell/55">
-              {token.raisedEth.toFixed(4)} / 3.5 ETH — graduates to Uniswap at 100%
+              {token.raisedEth.toFixed(4)} / 3.5 ETH in the locked pool — graduates at 100%
             </span>
           </div>
           <div className="mt-2 h-3 overflow-hidden rounded-full bg-coop-surface-warm dark:bg-coop-800">

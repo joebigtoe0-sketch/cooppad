@@ -7,20 +7,22 @@ import {
   useAccount,
   useChainId,
   useReadContract,
+  useSimulateContract,
   useSwitchChain,
   useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
 
 import { useCurrency } from "@/components/curve/CurrencyProvider";
-import { coopLaunchpadAbi } from "@/lib/evm/abi/coopLaunchpad";
-import { coopLaunchTokenAbi } from "@/lib/evm/abi/coopLaunchToken";
-import { activeChain, launchpadAddress } from "@/lib/evm/chains";
+import { coopLaunchTokenV2Abi } from "@/lib/evm/abi/coopLaunchTokenV2";
+import { coopRouterAbi } from "@/lib/evm/abi/coopRouter";
+import { activeChain, routerAddress } from "@/lib/evm/chains";
 import type { CurveTokenJson } from "@/types/curve";
 
 const SLIPPAGE_PRESETS = [0.5, 1, 2, 5];
 const ETH_PRESETS = ["0.05", "0.1", "0.5", "1"];
 const USD_PRESETS = ["10", "50", "100", "250"];
+const POOL_FEE = 10_000; // 1% Uniswap v3 tier
 
 export function CurveTradeWidget({
   token,
@@ -55,9 +57,9 @@ export function CurveTradeWidget({
   }, []);
 
   const chain = activeChain();
-  const launchpad = launchpadAddress();
+  const router = routerAddress();
   const tokenAddr = token.address as `0x${string}`;
-  const graduated = token.phase === "graduated";
+  const superLp = token.flavor === "superLp";
   const wrongChain = isConnected && chainId !== chain.id;
   const usdMode = inputCur === "USD" && ethUsd > 0;
 
@@ -93,24 +95,8 @@ export function CurveTradeWidget({
     }
   }, [amount, tab]);
 
-  const { data: buyQuote } = useReadContract({
-    abi: coopLaunchpadAbi,
-    address: launchpad,
-    functionName: "quoteBuy",
-    args: [tokenAddr, buyWei],
-    query: { enabled: !graduated && buyWei > 0n, refetchInterval: 4_000 },
-  });
-
-  const { data: sellQuote } = useReadContract({
-    abi: coopLaunchpadAbi,
-    address: launchpad,
-    functionName: "quoteSell",
-    args: [tokenAddr, sellTokens],
-    query: { enabled: !graduated && sellTokens > 0n, refetchInterval: 4_000 },
-  });
-
   const { data: balance, refetch: refetchBalance } = useReadContract({
-    abi: coopLaunchTokenAbi,
+    abi: coopLaunchTokenV2Abi,
     address: tokenAddr,
     functionName: "balanceOf",
     args: [account ?? "0x0000000000000000000000000000000000000000"],
@@ -118,12 +104,52 @@ export function CurveTradeWidget({
   });
 
   const { data: allowance, refetch: refetchAllowance } = useReadContract({
-    abi: coopLaunchTokenAbi,
+    abi: coopLaunchTokenV2Abi,
     address: tokenAddr,
     functionName: "allowance",
-    args: [account ?? "0x0000000000000000000000000000000000000000", launchpad],
+    args: [account ?? "0x0000000000000000000000000000000000000000", router],
     query: { enabled: Boolean(account) },
   });
+
+  const canSimulateSell =
+    Boolean(account) && sellTokens > 0n && (allowance ?? 0n) >= sellTokens &&
+    (balance ?? 0n) >= sellTokens;
+
+  // Quotes come from eth_call simulation of the actual swap — exact, including
+  // the pool fee and (for Super LP) the buy tax, since the router returns what
+  // the recipient really receives.
+  const { data: buySim } = useSimulateContract({
+    abi: coopRouterAbi,
+    address: router,
+    functionName: "buyExactEth",
+    args: [tokenAddr, POOL_FEE, 0n, account ?? router],
+    value: buyWei,
+    query: { enabled: Boolean(account) && buyWei > 0n, refetchInterval: 4_000 },
+  });
+  const { data: sellSim } = useSimulateContract({
+    abi: coopRouterAbi,
+    address: router,
+    functionName: "sellExactTokens",
+    args: [tokenAddr, POOL_FEE, sellTokens, 0n, account ?? router],
+    query: { enabled: canSimulateSell, refetchInterval: 4_000 },
+  });
+
+  // Price-based fallback estimates for the not-yet-connected / not-yet-approved
+  // states (1% pool fee, and 5% buy tax on Super LP).
+  const buyEstimate = useMemo(() => {
+    if (buySim?.result !== undefined) return buySim.result;
+    if (buyWei === 0n || token.priceEth <= 0) return 0n;
+    const eth = Number(formatEther(buyWei)) * 0.99;
+    const tokens = (eth / token.priceEth) * (superLp ? 0.95 : 1);
+    return parseEther(Math.max(0, tokens).toFixed(18));
+  }, [buySim, buyWei, token.priceEth, superLp]);
+
+  const sellEstimate = useMemo(() => {
+    if (sellSim?.result !== undefined) return sellSim.result;
+    if (sellTokens === 0n || token.priceEth <= 0) return 0n;
+    const eth = Number(formatEther(sellTokens)) * token.priceEth * 0.99;
+    return parseEther(Math.max(0, eth).toFixed(18));
+  }, [sellSim, sellTokens, token.priceEth]);
 
   const { writeContract, data: txHash, isPending, error: writeError, reset } =
     useWriteContract();
@@ -146,7 +172,7 @@ export function CurveTradeWidget({
   const busy = isPending || confirming;
 
   const submit = () => {
-    if (!isConnected) {
+    if (!isConnected || !account) {
       openConnectModal?.();
       return;
     }
@@ -155,58 +181,31 @@ export function CurveTradeWidget({
       return;
     }
     if (tab === "buy") {
-      if (buyWei === 0n || !buyQuote) return;
+      if (buyWei === 0n) return;
       writeContract({
-        abi: coopLaunchpadAbi,
-        address: launchpad,
-        functionName: "buy",
-        args: [tokenAddr, applySlippage(buyQuote[0])],
+        abi: coopRouterAbi,
+        address: router,
+        functionName: "buyExactEth",
+        args: [tokenAddr, POOL_FEE, applySlippage(buyEstimate), account],
         value: buyWei,
       });
     } else if (needsApproval) {
       writeContract({
-        abi: coopLaunchTokenAbi,
+        abi: coopLaunchTokenV2Abi,
         address: tokenAddr,
         functionName: "approve",
-        args: [launchpad, maxUint256],
+        args: [router, maxUint256],
       });
     } else {
-      if (sellTokens === 0n || !sellQuote) return;
+      if (sellTokens === 0n) return;
       writeContract({
-        abi: coopLaunchpadAbi,
-        address: launchpad,
-        functionName: "sell",
-        args: [tokenAddr, sellTokens, applySlippage(sellQuote[0])],
+        abi: coopRouterAbi,
+        address: router,
+        functionName: "sellExactTokens",
+        args: [tokenAddr, POOL_FEE, sellTokens, applySlippage(sellEstimate), account],
       });
     }
   };
-
-  if (graduated) {
-    return (
-      <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-5 text-center">
-        <p className="text-3xl" aria-hidden>
-          🎓
-        </p>
-        <p className="mt-2 font-display text-base font-extrabold text-coop-ink dark:text-coop-shell">
-          Graduated to Uniswap
-        </p>
-        <p className="mt-1 text-xs leading-relaxed text-coop-wood/75 dark:text-coop-shell/60">
-          The bonding curve is complete — trading now happens on Uniswap v3 with
-          the liquidity locked forever.
-        </p>
-        {token.pair ? (
-          <a
-            href={`${chain.blockExplorers?.default.url ?? ""}/address/${token.pair}`}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-3 inline-block rounded-lg bg-coop-ink px-4 py-2 text-xs font-bold text-white transition hover:bg-coop-orange dark:bg-coop-yolk dark:text-coop-950"
-          >
-            View Uniswap pool ↗
-          </a>
-        ) : null}
-      </div>
-    );
-  }
 
   const label = !isConnected
     ? "Connect wallet"
@@ -224,6 +223,11 @@ export function CurveTradeWidget({
 
   return (
     <div className="rounded-2xl border border-coop-straw/40 bg-coop-surface p-4 dark:border-coop-700 dark:bg-coop-900/60">
+      {token.phase === "graduated" ? (
+        <div className="mb-3 flex items-center gap-2 rounded-xl bg-emerald-500/10 px-3 py-2 text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+          🎓 Graduated — 3.5+ ETH in the locked pool. Trading never stops.
+        </div>
+      ) : null}
       <div className="flex rounded-xl border border-coop-straw/40 p-1 dark:border-coop-700">
         {(["buy", "sell"] as const).map((t) => (
           <button
@@ -332,12 +336,12 @@ export function CurveTradeWidget({
 
       <div className="mt-3 rounded-xl bg-coop-surface-warm/50 px-3 py-2 text-xs text-coop-wood/80 dark:bg-coop-800/50 dark:text-coop-shell/65">
         {tab === "buy" ? (
-          buyWei > 0n && buyQuote ? (
+          buyWei > 0n && buyEstimate > 0n ? (
             <>
               <div className="flex justify-between">
                 <span>You receive ≈</span>
                 <span className="font-mono font-bold">
-                  {Number(formatEther(buyQuote[0])).toLocaleString("en-US", {
+                  {Number(formatEther(buyEstimate)).toLocaleString("en-US", {
                     maximumFractionDigits: 0,
                   })}{" "}
                   {token.symbol}
@@ -349,23 +353,23 @@ export function CurveTradeWidget({
                   <span className="font-mono">{Number(formatEther(buyWei)).toFixed(5)} ETH</span>
                 </div>
               ) : null}
-              {buyQuote[3] > 0n ? (
+              {superLp ? (
                 <div className="mt-1 flex justify-between text-coop-orange">
-                  <span>Completes the curve — refund</span>
-                  <span className="font-mono">{fmt(Number(formatEther(buyQuote[3])))}</span>
+                  <span>5% buy tax → locked LP</span>
+                  <span className="font-mono">included</span>
                 </div>
               ) : null}
             </>
           ) : (
-            <span>Enter an amount to see the quote (1% curve fee included).</span>
+            <span>Enter an amount to see the quote (1% pool fee included).</span>
           )
-        ) : sellTokens > 0n && sellQuote ? (
+        ) : sellTokens > 0n && sellEstimate > 0n ? (
           <div className="flex justify-between">
             <span>You receive ≈</span>
-            <span className="font-mono font-bold">{fmt(Number(formatEther(sellQuote[0])))}</span>
+            <span className="font-mono font-bold">{fmt(Number(formatEther(sellEstimate)))}</span>
           </div>
         ) : (
-          <span>Enter an amount to see the quote (1% curve fee included).</span>
+          <span>Enter an amount to see the quote (1% pool fee included).</span>
         )}
       </div>
 
@@ -431,7 +435,8 @@ export function CurveTradeWidget({
         </p>
       ) : null}
       <p className="mt-2 text-center text-[10px] text-coop-wood/50 dark:text-coop-shell/40">
-        Curve fees: 0.5% platform + 0.5% creator
+        Trades on Uniswap v3 · 1% pool fee split creator/platform
+        {superLp ? " · 5% buy tax deepens locked LP" : ""}
       </p>
     </div>
   );

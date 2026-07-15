@@ -12,14 +12,15 @@ import {
   useWriteContract,
 } from "wagmi";
 
-import { coopLaunchpadAbi } from "@/lib/evm/abi/coopLaunchpad";
+import { coopLaunchpadV2Abi } from "@/lib/evm/abi/coopLaunchpadV2";
 import { activeChain, launchpadAddress } from "@/lib/evm/chains";
 
-type Flavor = 0 | 1; // 0 = Standard, 1 = LPGrow (matches the contract enum)
+type Flavor = 0 | 1 | 2; // 0 = Standard, 1 = LPGrow, 2 = SuperLP (contract enum)
+const FLAVOR_KEYS = ["standard", "lpGrow", "superLp"] as const;
 
 export function CurveLaunchForm() {
   const router = useRouter();
-  const { isConnected } = useAccount();
+  const { isConnected, address: account } = useAccount();
   const { openConnectModal } = useConnectModal();
   const chainId = useChainId();
   const { switchChain } = useSwitchChain();
@@ -53,17 +54,17 @@ export function CurveLaunchForm() {
     }
   }, [devBuy]);
 
-  // Once mined, pull the new token address out of the TokenCreated log and go there.
+  // Once mined, pull the new token address out of the TokenLaunched log and go there.
   useEffect(() => {
     if (!receipt) return;
     for (const log of receipt.logs) {
       try {
         const decoded = decodeEventLog({
-          abi: coopLaunchpadAbi,
+          abi: coopLaunchpadV2Abi,
           data: log.data,
           topics: log.topics,
         });
-        if (decoded.eventName === "TokenCreated") {
+        if (decoded.eventName === "TokenLaunched") {
           const tokenAddr = (decoded.args as { token: string }).token;
           router.push(`/coin/${tokenAddr.toLowerCase()}`);
           return;
@@ -124,7 +125,13 @@ export function CurveLaunchForm() {
         const saltRes = await fetch("/api/curve/vanity-salt", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: cleanName, symbol: cleanSymbol, metadataURI: uri }),
+          body: JSON.stringify({
+            name: cleanName,
+            symbol: cleanSymbol,
+            metadataURI: uri,
+            creator: account,
+            flavor: FLAVOR_KEYS[flavor],
+          }),
         });
         const mined = (await saltRes.json()) as { ok: boolean; salt?: `0x${string}` };
         if (mined.ok && mined.salt) salt = mined.salt;
@@ -133,10 +140,10 @@ export function CurveLaunchForm() {
       }
 
       writeContract({
-        abi: coopLaunchpadAbi,
+        abi: coopLaunchpadV2Abi,
         address: launchpadAddress(),
-        functionName: "createToken",
-        args: [cleanName, cleanSymbol, uri, flavor, 0n, salt],
+        functionName: "launchToken",
+        args: [cleanName, cleanSymbol, uri, flavor, salt, 0n],
         value: devBuyWei,
       });
     } catch (err) {
@@ -244,39 +251,44 @@ export function CurveLaunchForm() {
 
         <div>
           <label className={labelCls}>Token type</label>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => setFlavor(0)}
-              className={`rounded-2xl border-2 p-4 text-left transition ${
-                flavor === 0
-                  ? "border-coop-yolk bg-coop-yolk/10"
-                  : "border-coop-straw/40 bg-coop-surface hover:border-coop-yolk/60 dark:border-coop-700 dark:bg-coop-900/60"
-              }`}
-            >
-              <p className="font-display text-sm font-extrabold text-coop-ink dark:text-coop-shell">
-                Standard
-              </p>
-              <p className="mt-1 text-xs leading-snug text-coop-wood/75 dark:text-coop-shell/60">
-                0% fees — no token tax, ever
-              </p>
-            </button>
-            <button
-              type="button"
-              onClick={() => setFlavor(1)}
-              className={`rounded-2xl border-2 p-4 text-left transition ${
-                flavor === 1
-                  ? "border-coop-yolk bg-coop-yolk/10"
-                  : "border-coop-straw/40 bg-coop-surface hover:border-coop-yolk/60 dark:border-coop-700 dark:bg-coop-900/60"
-              }`}
-            >
-              <p className="font-display text-sm font-extrabold text-coop-ink dark:text-coop-shell">
-                🌱 LP-Growing
-              </p>
-              <p className="mt-1 text-xs leading-snug text-coop-wood/75 dark:text-coop-shell/60">
-                0% fees — Uniswap pool fees auto-deepen the locked liquidity
-              </p>
-            </button>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {(
+              [
+                {
+                  id: 0 as Flavor,
+                  title: "Standard",
+                  text: "0% fees — no token tax, ever",
+                },
+                {
+                  id: 1 as Flavor,
+                  title: "🌱 LP-Growing",
+                  text: "0% fees — Uniswap pool fees auto-deepen the locked liquidity",
+                },
+                {
+                  id: 2 as Flavor,
+                  title: "🔒 Super LP",
+                  text: "5% buy tax — 100% auto-compounds into liquidity locked forever",
+                },
+              ] as const
+            ).map((card) => (
+              <button
+                key={card.id}
+                type="button"
+                onClick={() => setFlavor(card.id)}
+                className={`rounded-2xl border-2 p-4 text-left transition ${
+                  flavor === card.id
+                    ? "border-coop-yolk bg-coop-yolk/10"
+                    : "border-coop-straw/40 bg-coop-surface hover:border-coop-yolk/60 dark:border-coop-700 dark:bg-coop-900/60"
+                }`}
+              >
+                <p className="font-display text-sm font-extrabold text-coop-ink dark:text-coop-shell">
+                  {card.title}
+                </p>
+                <p className="mt-1 text-xs leading-snug text-coop-wood/75 dark:text-coop-shell/60">
+                  {card.text}
+                </p>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -315,8 +327,9 @@ export function CurveLaunchForm() {
           Your token&apos;s address ends in{" "}
           <code className="rounded bg-coop-surface-warm px-1 py-0.5 font-mono dark:bg-coop-800">
             …c00
-          </code>{" "}
-          and graduates to Uniswap at 3.5 ETH raised.
+          </code>
+          , trades on Uniswap v3 from the very first block, and earns the graduated
+          badge at 3.5 ETH in the pool. Liquidity is locked forever.
         </p>
       </form>
 
@@ -363,6 +376,10 @@ export function CurveLaunchForm() {
           {flavor === 1 ? (
             <span className="mt-2 inline-flex w-fit items-center gap-1 rounded-full bg-coop-sky/10 px-2 py-0.5 text-[10px] font-bold text-coop-sky dark:bg-coop-sky/20">
               🌱 LP-Growing
+            </span>
+          ) : flavor === 2 ? (
+            <span className="mt-2 inline-flex w-fit items-center gap-1 rounded-full bg-coop-orange/10 px-2 py-0.5 text-[10px] font-bold text-coop-orange dark:bg-coop-orange/20">
+              🔒 Super LP
             </span>
           ) : null}
         </div>

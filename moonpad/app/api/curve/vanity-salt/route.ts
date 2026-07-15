@@ -1,20 +1,26 @@
 import { NextResponse } from "next/server";
 import { encodeAbiParameters, keccak256 } from "viem";
 
-import { coopLaunchTokenBytecode } from "@/lib/evm/abi/coopLaunchTokenBytecode";
+import { coopLaunchTokenV2Bytecode } from "@/lib/evm/abi/coopLaunchTokenV2Bytecode";
 import { isEvmConfigured, launchpadAddress } from "@/lib/evm/chains";
 
 export const runtime = "nodejs";
 
 /** Every Coop token address ends in `c00` ("coo" — hex has no letter p, so "coop"
- * itself is impossible). This endpoint mines a CREATE2 salt for the exact launch
- * parameters; the contract's `createToken` then lands the token on the mined
- * address. Falls back to a random salt (vanity: false) if the budget runs out.
- * Override with VANITY_SUFFIX (hex chars only). */
+ * itself is impossible). This endpoint mines a CREATE2 salt for the exact V2
+ * launch parameters; the contract's `launchToken` then lands the token on the
+ * mined address. Falls back to a random salt (vanity: false) if the budget runs
+ * out. Override with VANITY_SUFFIX (hex chars only).
+ *
+ * V2 token constructor: (name, symbol, metadataURI, creator, buyTaxBps) — the
+ * creator wallet and flavor are part of the CREATE2 init code, so both must be
+ * supplied by the launch form before mining.
+ */
 
 const SUFFIX = (process.env.VANITY_SUFFIX ?? "c00").toLowerCase();
 const MAX_ITERATIONS = 400_000;
 const TIME_BUDGET_MS = 9_000;
+const FLAVOR_TAX_BPS: Record<string, number> = { standard: 0, lpGrow: 0, superLp: 500 };
 
 function hexToBytes(hex: string): Uint8Array {
   const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
@@ -36,19 +42,36 @@ export async function POST(req: Request) {
     if (!isEvmConfigured()) {
       return NextResponse.json({ ok: false, error: "EVM not configured" }, { status: 500 });
     }
-    const body = (await req.json()) as { name?: string; symbol?: string; metadataURI?: string };
+    const body = (await req.json()) as {
+      name?: string;
+      symbol?: string;
+      metadataURI?: string;
+      creator?: string;
+      flavor?: string;
+    };
     const name = String(body.name ?? "").slice(0, 64);
     const symbol = String(body.symbol ?? "").slice(0, 16);
     const metadataURI = String(body.metadataURI ?? "").slice(0, 300);
+    const creator = String(body.creator ?? "").toLowerCase();
+    const taxBps = FLAVOR_TAX_BPS[String(body.flavor ?? "standard")] ?? 0;
     if (!name || !symbol) {
       return NextResponse.json({ ok: false, error: "name and symbol required" }, { status: 400 });
     }
+    if (!/^0x[0-9a-f]{40}$/.test(creator)) {
+      return NextResponse.json({ ok: false, error: "creator address required" }, { status: 400 });
+    }
 
     const args = encodeAbiParameters(
-      [{ type: "string" }, { type: "string" }, { type: "string" }],
-      [name, symbol, metadataURI]
+      [
+        { type: "string" },
+        { type: "string" },
+        { type: "string" },
+        { type: "address" },
+        { type: "uint16" },
+      ],
+      [name, symbol, metadataURI, creator as `0x${string}`, taxBps]
     );
-    const initCodeHash = keccak256((coopLaunchTokenBytecode + args.slice(2)) as `0x${string}`);
+    const initCodeHash = keccak256((coopLaunchTokenV2Bytecode + args.slice(2)) as `0x${string}`);
 
     // preimage = 0xff ++ deployer(20) ++ salt(32) ++ initCodeHash(32)
     const preimage = new Uint8Array(85);

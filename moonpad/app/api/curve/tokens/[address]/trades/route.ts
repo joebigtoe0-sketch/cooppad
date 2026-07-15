@@ -15,7 +15,7 @@ export async function GET(
     const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 200);
     const db = await curveDb();
     const res = await db.query(
-      `SELECT * FROM curve_trades WHERE token = $1
+      `SELECT * FROM curve_trades WHERE token = $1 AND NOT internal
        ORDER BY block_number DESC, log_index DESC LIMIT ${limit}`,
       [params.address.toLowerCase()]
     );

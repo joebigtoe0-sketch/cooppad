@@ -10,6 +10,7 @@ const items: NavItem[] = [
   { href: "/", label: "The Coop", icon: "◇" },
   { href: "/launch", label: "Launch token", icon: "◎" },
   { href: "/portfolio", label: "Portfolio", icon: "▤" },
+  { href: "/analytics", label: "Analytics", icon: "▁▃▅" },
   { href: "/docs", label: "Docs", icon: "▧" },
 ];
 

@@ -68,6 +68,28 @@ const MIGRATIONS = [
      key   TEXT PRIMARY KEY,
      value TEXT NOT NULL
    )`,
+  // --- V2 (instant-pool) additions ---
+  `ALTER TABLE curve_tokens ADD COLUMN IF NOT EXISTS pool TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE curve_tokens ADD COLUMN IF NOT EXISTS is_token0 BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE curve_tokens ADD COLUMN IF NOT EXISTS raised_wei NUMERIC NOT NULL DEFAULT 0`,
+  `ALTER TABLE curve_tokens ADD COLUMN IF NOT EXISTS last_price DOUBLE PRECISION NOT NULL DEFAULT 0`,
+  // Trades executed by the protocol itself (tax-compounding cranks) — kept for
+  // volume accuracy, hidden from the live trade feeds.
+  `ALTER TABLE curve_trades ADD COLUMN IF NOT EXISTS internal BOOLEAN NOT NULL DEFAULT FALSE`,
+  // Locker fee collections + tax compounds, for the analytics page.
+  `CREATE TABLE IF NOT EXISTS curve_fee_events (
+     tx_hash        TEXT NOT NULL,
+     log_index      INTEGER NOT NULL,
+     token          TEXT NOT NULL,
+     kind           TEXT NOT NULL,           -- 'fees' | 'tax'
+     pair_payout    NUMERIC NOT NULL DEFAULT 0,   -- WETH paid out (both shares)
+     token_payout   NUMERIC NOT NULL DEFAULT 0,   -- token paid out (both shares)
+     pair_reinvest  NUMERIC NOT NULL DEFAULT 0,
+     token_reinvest NUMERIC NOT NULL DEFAULT 0,
+     ts             TIMESTAMPTZ NOT NULL,
+     PRIMARY KEY (tx_hash, log_index)
+   )`,
+  `CREATE INDEX IF NOT EXISTS curve_fee_events_ts ON curve_fee_events (ts)`,
 ];
 
 async function createDb(): Promise<CurveDb> {

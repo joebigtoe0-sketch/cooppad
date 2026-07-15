@@ -42,6 +42,11 @@ const targets = [
     file: "coopLockerV2.ts",
     exportName: "coopLockerV2Abi",
   },
+  {
+    artifact: path.join(outDir, "CoopRouter.sol", "CoopRouter.json"),
+    file: "coopRouter.ts",
+    exportName: "coopRouterAbi",
+  },
 ];
 
 fs.mkdirSync(abiDir, { recursive: true });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { encodePacked, formatEther, keccak256 } from "viem";
+import { formatEther } from "viem";
 import {
   useAccount,
   useReadContract,
@@ -10,13 +10,11 @@ import {
 } from "wagmi";
 
 import { useCurrency } from "@/components/curve/CurrencyProvider";
-import { coopLaunchpadAbi } from "@/lib/evm/abi/coopLaunchpad";
-import { coopLockerAbi } from "@/lib/evm/abi/coopLocker";
+import { coopLaunchpadV2Abi } from "@/lib/evm/abi/coopLaunchpadV2";
+import { coopLockerV2Abi } from "@/lib/evm/abi/coopLockerV2";
 import { launchpadAddress } from "@/lib/evm/chains";
 import type { CurveTokenJson } from "@/types/curve";
 
-const TICK_LOWER = -887200;
-const TICK_UPPER = 887200;
 const Q128 = 1n << 128n;
 const BPS = 10_000n;
 const CREATOR_SHARE_BPS = 5_000n;
@@ -69,9 +67,9 @@ function fmtToken(amountWei: bigint): string {
 
 /**
  * Shown on a coin page only when the connected wallet created the token.
- * Curve-phase trade fees accrue in the launchpad per wallet (claimFees);
- * after graduation the locked v3 position's swap fees are collected via the
- * locker, which pays the creator's share out automatically.
+ * V2: the locked position's Uniswap fees are the whole reward stream — the
+ * locker pays the creator's share straight to their wallet on every collect,
+ * so there is nothing to "claim", only a crank anyone can press.
  */
 export function CreatorRewards({ token }: { token: CurveTokenJson }) {
   const { address: account } = useAccount();
@@ -81,48 +79,37 @@ export function CreatorRewards({ token }: { token: CurveTokenJson }) {
   const isCreator = Boolean(
     account && account.toLowerCase() === token.creator.toLowerCase()
   );
-  const graduated = token.phase === "graduated";
-
-  // 0.5% of every curve trade, accrued per creator wallet (all their launches).
-  const { data: curveFees, refetch: refetchCurveFees } = useReadContract({
-    abi: coopLaunchpadAbi,
-    address: launchpad,
-    functionName: "feesOwed",
-    args: [account ?? "0x0000000000000000000000000000000000000000"],
-    query: { enabled: isCreator, refetchInterval: 10_000 },
-  });
 
   const { data: lockerAddr } = useReadContract({
-    abi: coopLaunchpadAbi,
+    abi: coopLaunchpadV2Abi,
     address: launchpad,
     functionName: "locker",
-    query: { enabled: isCreator && graduated },
+    query: { enabled: isCreator },
   });
 
   const { data: lock } = useReadContract({
-    abi: coopLockerAbi,
+    abi: coopLockerV2Abi,
     address: lockerAddr,
     functionName: "locks",
     args: [token.address as `0x${string}`],
-    query: { enabled: Boolean(isCreator && graduated && lockerAddr) },
+    query: { enabled: Boolean(isCreator && lockerAddr) },
   });
   const poolAddr = lock?.[0];
   const reinvestBps = lock ? BigInt(lock[2]) : 0n;
 
-  const positionKey = lockerAddr
-    ? keccak256(
-        encodePacked(
-          ["address", "int24", "int24"],
-          [lockerAddr, TICK_LOWER, TICK_UPPER]
-        )
-      )
-    : undefined;
+  const { data: positionKey } = useReadContract({
+    abi: coopLockerV2Abi,
+    address: lockerAddr,
+    functionName: "positionKey",
+    args: [token.address as `0x${string}`],
+    query: { enabled: Boolean(isCreator && lockerAddr) },
+  });
 
   const poolQuery = {
     abi: poolAbi,
     address: poolAddr,
     query: {
-      enabled: Boolean(isCreator && graduated && poolAddr && positionKey),
+      enabled: Boolean(isCreator && poolAddr && positionKey),
       refetchInterval: 15_000,
     },
   } as const;
@@ -139,17 +126,14 @@ export function CreatorRewards({ token }: { token: CurveTokenJson }) {
   const { isSuccess: confirmed } = useWaitForTransactionReceipt({ hash: txHash });
 
   useEffect(() => {
-    if (confirmed) {
-      void refetchCurveFees();
-      void refetchPos();
-    }
-  }, [confirmed, refetchCurveFees, refetchPos]);
+    if (confirmed) void refetchPos();
+  }, [confirmed, refetchPos]);
 
   if (!isCreator) return null;
 
   // Pending pool fees = fees already owed to the position + growth since the
-  // last poke. The position spans the full range and the pool never trades
-  // beyond its edge ticks, so feeGrowthInside == feeGrowthGlobal here.
+  // last poke. The position never trades beyond its edge ticks, so
+  // feeGrowthInside == feeGrowthGlobal here.
   let pendingToken = 0n;
   let pendingWeth = 0n;
   if (pos && growth0 !== undefined && growth1 !== undefined && token0) {
@@ -161,12 +145,10 @@ export function CreatorRewards({ token }: { token: CurveTokenJson }) {
     pendingWeth = tokenIs0 ? pending1 : pending0;
   }
 
-  // Creator receives half of whatever is paid out after the reinvest cut.
+  // Creator receives half of whatever fee share is paid out after reinvest.
   const creatorCutBps = ((BPS - reinvestBps) * CREATOR_SHARE_BPS) / BPS;
   const creatorToken = (pendingToken * creatorCutBps) / BPS;
   const creatorWeth = (pendingWeth * creatorCutBps) / BPS;
-
-  const curveFeesWei = curveFees ?? 0n;
   const hasPoolFees = creatorToken > 0n || creatorWeth > 0n;
 
   return (
@@ -175,72 +157,46 @@ export function CreatorRewards({ token }: { token: CurveTokenJson }) {
         👑 Creator rewards
       </p>
 
-      {/* curve-phase trade fees */}
       <div className="mt-3 flex items-center justify-between gap-3">
         <div>
-          <p className="font-mono text-lg font-bold text-coop-ink dark:text-coop-shell">
-            {Number(formatEther(curveFeesWei)).toFixed(curveFeesWei > 0n ? 5 : 0)} ETH
+          <p className="font-mono text-sm font-bold text-coop-ink dark:text-coop-shell">
+            {fmtToken(creatorToken)} {token.symbol}
+            <span className="text-coop-wood/50 dark:text-coop-shell/40"> + </span>
+            {Number(formatEther(creatorWeth)).toFixed(creatorWeth > 0n ? 5 : 0)} WETH
+            {creatorWeth > 0n ? (
+              <span className="text-coop-wood/50 dark:text-coop-shell/40">
+                {" "}
+                ({fmt(Number(formatEther(creatorWeth)))})
+              </span>
+            ) : null}
           </p>
           <p className="text-[11px] text-coop-wood/65 dark:text-coop-shell/55">
-            Curve trade fees ({fmt(Number(formatEther(curveFeesWei)))}) — 0.5% of every
-            curve trade, across all your launches
+            Your share of uncollected pool fees — paid straight to your wallet on
+            collect
+            {token.flavor === "lpGrow"
+              ? " (70% reinvests into locked liquidity first)"
+              : token.flavor === "superLp"
+                ? " (the 5% buy tax compounds into LP separately)"
+                : " (split 50/50 with the platform)"}
           </p>
         </div>
         <button
           type="button"
-          disabled={isPending || curveFeesWei === 0n}
+          disabled={isPending || !lockerAddr || !hasPoolFees}
           onClick={() =>
+            lockerAddr &&
             writeContract({
-              abi: coopLaunchpadAbi,
-              address: launchpad,
-              functionName: "claimFees",
+              abi: coopLockerV2Abi,
+              address: lockerAddr,
+              functionName: "collect",
+              args: [token.address as `0x${string}`],
             })
           }
           className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
         >
-          Claim
+          Collect
         </button>
       </div>
-
-      {/* post-graduation pool fees */}
-      {graduated ? (
-        <div className="mt-3 flex items-center justify-between gap-3 border-t border-coop-yolk/25 pt-3 dark:border-coop-yolk/20">
-          <div>
-            <p className="font-mono text-sm font-bold text-coop-ink dark:text-coop-shell">
-              {fmtToken(creatorToken)} {token.symbol}
-              <span className="text-coop-wood/50 dark:text-coop-shell/40"> + </span>
-              {Number(formatEther(creatorWeth)).toFixed(creatorWeth > 0n ? 5 : 0)} WETH
-            </p>
-            <p className="text-[11px] text-coop-wood/65 dark:text-coop-shell/55">
-              Your share of uncollected Uniswap pool fees
-              {token.flavor === "lpGrow"
-                ? " (70% reinvests into locked liquidity first)"
-                : " (split 50/50 with the platform)"}
-            </p>
-          </div>
-          <button
-            type="button"
-            disabled={isPending || !lockerAddr || !hasPoolFees}
-            onClick={() =>
-              lockerAddr &&
-              writeContract({
-                abi: coopLockerAbi,
-                address: lockerAddr,
-                functionName: "collect",
-                args: [token.address as `0x${string}`],
-              })
-            }
-            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
-          >
-            Collect
-          </button>
-        </div>
-      ) : (
-        <p className="mt-3 border-t border-coop-yolk/25 pt-3 text-[11px] text-coop-wood/60 dark:border-coop-yolk/20 dark:text-coop-shell/50">
-          After graduation you also earn from the Uniswap pool&apos;s 1% swap fee —
-          forever. It will show up here.
-        </p>
-      )}
     </div>
   );
 }

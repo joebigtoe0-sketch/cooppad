@@ -12,8 +12,8 @@ import {
 } from "wagmi";
 
 import { useCurrency } from "@/components/curve/CurrencyProvider";
-import { coopLaunchpadAbi } from "@/lib/evm/abi/coopLaunchpad";
-import { coopLockerAbi } from "@/lib/evm/abi/coopLocker";
+import { coopLaunchpadV2Abi } from "@/lib/evm/abi/coopLaunchpadV2";
+import { coopLockerV2Abi } from "@/lib/evm/abi/coopLockerV2";
 import { launchpadAddress } from "@/lib/evm/chains";
 import { ipfsToHttp } from "@/lib/evm/ipfs";
 import type { CurveTokenJson } from "@/types/curve";
@@ -81,19 +81,10 @@ export function PortfolioClient() {
     return () => clearInterval(id);
   }, [load]);
 
-  // Curve trade fees claimable from the launchpad (creators earn 0.5% of curve volume).
-  const { data: curveFees, refetch: refetchCurveFees } = useReadContract({
-    abi: coopLaunchpadAbi,
-    address: launchpad,
-    functionName: "feesOwed",
-    args: [account ?? "0x0000000000000000000000000000000000000000"],
-    query: { enabled: Boolean(account), refetchInterval: 10_000 },
-  });
-
-  // Post-graduation, the locked v3 position's fees are collected via the locker
-  // and pushed straight to the creator + platform wallets.
+  // The locked v3 position's pool fees are collected via the locker and pushed
+  // straight to the creator + platform wallets — nothing sits claimable.
   const { data: lockerAddr } = useReadContract({
-    abi: coopLaunchpadAbi,
+    abi: coopLaunchpadV2Abi,
     address: launchpad,
     functionName: "locker",
   });
@@ -102,10 +93,8 @@ export function PortfolioClient() {
   const { isSuccess: confirmed } = useWaitForTransactionReceipt({ hash: txHash });
 
   useEffect(() => {
-    if (confirmed) {
-      void refetchCurveFees();
-    }
-  }, [confirmed, refetchCurveFees]);
+    if (confirmed) void load();
+  }, [confirmed, load]);
 
   if (!isConnected) {
     return (
@@ -131,7 +120,6 @@ export function PortfolioClient() {
   }
 
   const totalValue = holdings.reduce((s, h) => s + h.valueEth, 0);
-  const curveFeesEth = curveFees ?? 0n;
 
   return (
     <div className="space-y-6 pb-8">
@@ -155,29 +143,12 @@ export function PortfolioClient() {
         </div>
         <div className="rounded-2xl border border-coop-straw/40 bg-coop-surface p-4 dark:border-coop-700 dark:bg-coop-900/60">
           <p className="text-[10px] font-bold uppercase tracking-wider text-coop-wood/60 dark:text-coop-shell/50">
-            Claimable curve fees
+            Creator fees
           </p>
-          <div className="mt-1 flex items-center gap-3">
-            <p className="font-mono text-xl font-bold text-coop-ink dark:text-coop-shell">
-              {fmt(Number(formatEther(curveFeesEth)))}
-            </p>
-            {curveFeesEth > 0n ? (
-              <button
-                type="button"
-                disabled={isPending}
-                onClick={() =>
-                  writeContract({
-                    abi: coopLaunchpadAbi,
-                    address: launchpad,
-                    functionName: "claimFees",
-                  })
-                }
-                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:opacity-50"
-              >
-                Claim
-              </button>
-            ) : null}
-          </div>
+          <p className="mt-1 text-xs leading-snug text-coop-wood/75 dark:text-coop-shell/60">
+            Pool fees pay straight to your wallet whenever anyone hits{" "}
+            <span className="font-bold">Collect</span> on your tokens below.
+          </p>
         </div>
       </div>
 
@@ -242,8 +213,8 @@ export function PortfolioClient() {
             <Link href="/launch" className="font-semibold underline hover:text-coop-orange">
               launch your first token
             </Link>
-            . You earn 0.5% of every curve trade, and half of the Uniswap pool&apos;s
-            1% fee stream after graduation — forever.
+            . You earn half of your token&apos;s 1% Uniswap fee stream from the very
+            first trade — forever.
           </div>
         ) : (
           <div className="mt-3 overflow-hidden rounded-2xl border border-coop-straw/40 bg-coop-surface dark:border-coop-700 dark:bg-coop-900/60">
@@ -269,28 +240,22 @@ export function PortfolioClient() {
                         {fmt(t.marketCapEth)}
                       </td>
                       <td className="px-4 py-2.5 text-right">
-                        {t.phase !== "graduated" ? (
-                          <span className="text-[11px] text-coop-wood/50 dark:text-coop-shell/40">
-                            after graduation
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={isPending || !lockerAddr}
-                            onClick={() =>
-                              lockerAddr &&
-                              writeContract({
-                                abi: coopLockerAbi,
-                                address: lockerAddr,
-                                functionName: "collect",
-                                args: [t.address as `0x${string}`],
-                              })
-                            }
-                            className="rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white transition hover:bg-emerald-500 disabled:opacity-50"
-                          >
-                            Collect pool fees
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          disabled={isPending || !lockerAddr}
+                          onClick={() =>
+                            lockerAddr &&
+                            writeContract({
+                              abi: coopLockerV2Abi,
+                              address: lockerAddr,
+                              functionName: "collect",
+                              args: [t.address as `0x${string}`],
+                            })
+                          }
+                          className="rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+                        >
+                          Collect pool fees
+                        </button>
                       </td>
                     </tr>
                   );

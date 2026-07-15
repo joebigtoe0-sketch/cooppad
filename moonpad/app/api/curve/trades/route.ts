@@ -16,6 +16,7 @@ export async function GET(req: Request) {
       `SELECT t.*, k.symbol, k.name, k.image_url
        FROM curve_trades t
        JOIN curve_tokens k ON k.address = t.token
+       WHERE NOT t.internal
        ORDER BY t.block_number DESC, t.log_index DESC
        LIMIT ${limit}`
     );
