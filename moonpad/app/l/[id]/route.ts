@@ -13,8 +13,25 @@ export const dynamic = "force-dynamic";
  * whose indexed metadata carries it. Unknown or not-yet-indexed ids land on
  * the homepage.
  */
+
+/**
+ * Public origin of this request. Behind Railway's proxy `req.url` is the
+ * INTERNAL address (localhost:8080), so redirects built from it leave users
+ * on localhost — use the forwarded headers, falling back to req.url for
+ * local dev.
+ */
+function publicOrigin(req: Request): string {
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  if (!host) return new URL(req.url).origin;
+  const proto =
+    req.headers.get("x-forwarded-proto") ??
+    new URL(req.url).protocol.replace(":", "");
+  return `${proto}://${host}`;
+}
+
 export async function GET(req: Request, { params }: { params: { id: string } }) {
-  const home = new URL("/", req.url);
+  const origin = publicOrigin(req);
+  const home = new URL("/", origin);
   const id = params.id;
   if (!/^[a-f0-9]{8,32}$/i.test(id)) return NextResponse.redirect(home);
   try {
@@ -24,7 +41,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       [`%/l/${id}`]
     );
     const address = res.rows[0]?.address;
-    return NextResponse.redirect(address ? new URL(`/coin/${address}`, req.url) : home);
+    return NextResponse.redirect(address ? new URL(`/coin/${address}`, origin) : home);
   } catch {
     return NextResponse.redirect(home);
   }
