@@ -18,6 +18,7 @@ import {
   launchpadAddress,
 } from "@/lib/evm/chains";
 import { curveDb, getMeta, setMeta, type CurveDb } from "@/lib/server/curveDb";
+import { verifyTokenSource } from "@/lib/server/tokenVerifier";
 
 /**
  * V2 indexer: tokens launch straight into locked single-sided Uniswap v3 pools,
@@ -335,17 +336,19 @@ class CurveIndexerV2 {
     const flavor = Number(args.flavor ?? 0);
     const ts = await this.tsOf(log.blockNumber ?? 0n);
 
-    // Strings live on the token contract, not in the event.
+    // Strings live on the token contract, not in the event. buyTaxBps rides
+    // along for the auto-verification's constructor args.
     const read = (fn: string) =>
       this.client.readContract({
         address: token as Address,
         abi: coopLaunchTokenV2Abi,
         functionName: fn as never,
       }) as Promise<string>;
-    const [name, symbol, uri] = await Promise.all([
+    const [name, symbol, uri, taxBps] = await Promise.all([
       read("name"),
       read("symbol"),
       read("metadataURI"),
+      read("buyTaxBps") as unknown as Promise<number>,
     ]);
     const isToken0 = token < (this.wethAddr ?? "");
 
@@ -372,6 +375,15 @@ class CurveIndexerV2 {
     this.pools.set(pool, { token, isToken0, flavor });
     this.dirty.add(token);
     void fetchMetadata(db, token, uri ?? "");
+    // Publish the token's source on Blockscout so security scanners read real
+    // code instead of decompiling (unverified bytecode = false honeypot flags).
+    verifyTokenSource(token, {
+      name: name ?? "",
+      symbol: symbol ?? "",
+      metadataUri: uri ?? "",
+      creator: (args.creator as string).toLowerCase() as `0x${string}`,
+      taxBps: Number(taxBps ?? 0),
+    });
   }
 
   private wethAddr: string | null = null;
